@@ -131,22 +131,56 @@ python scripts/vision/detect_realsense_yolo_xyz.py --allow-cpu
 - 这一步不需要机械臂在线
 - 这一步输出的是“候选抓取点”的相机坐标，不是机械臂基坐标
 
+如果已经完成标定，也可以直接同时显示机械臂基坐标：
+
+```bash
+python scripts/vision/detect_realsense_yolo_xyz.py \
+  --allow-cpu \
+  --calibration-file ./data/calib_run_02/calibration_result.yaml
+```
+
+这时画面和终端都会同时输出：
+
+- `camera_xyz_m`
+- `base_xyz_m`
+
 ### 第 5 步：做标定
+
+先打印并使用仓库里生成的标准 ChArUco 板：
+
+```text
+assets/calibration_boards/charuco_11x8_15mm_11mm_dict4x4_50_a4.pdf
+```
+
+打印时务必使用 `100%` 比例，关闭 `fit to page`。
+
+采集：
 
 ```bash
 python scripts/calibration/capture_eye_to_hand.py \
   --channel can0 \
-  --board-cols 8 \
-  --board-rows 6 \
-  --square-size-mm 20 \
+  --board-type charuco \
+  --board-cols 11 \
+  --board-rows 8 \
+  --square-size-mm 15 \
+  --marker-size-mm 11 \
+  --aruco-dict DICT_4X4_50 \
   --samples 15 \
-  --output-dir ./data/calib_run_01
+  --output-dir ./data/calib_run_02
 
 python scripts/calibration/solve_eye_to_hand.py \
-  --dataset-dir ./data/calib_run_01
+  --dataset-dir ./data/calib_run_02
+
+python scripts/calibration/verify_eye_to_hand.py \
+  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --channel can0 \
+  --camera-serial 241222074755 \
+  --samples 5
 ```
 
 这一步需要机械臂和相机都在线。
+
+当前这一套标准板和脚本已经验证通过，`calib_run_02` 可作为当前可用标定基线。
 
 ### 第 6 步：单独碰机械臂
 
@@ -155,12 +189,50 @@ python scripts/calibration/solve_eye_to_hand.py \
 ```bash
 python scripts/control/move_flange_pose.py \
   --channel can0 \
-  --pose 0.30 0.00 0.20 0.00 0.00 0.00
+  --pose -450 0 360 40 45 45 \
+  --mm \
+  --degrees \
+  --send-order mode_target_mode \
+  --mode-resend 3
 ```
 
 确认打印的目标位姿没问题后，再加 `--go`。
 
-### 第 7 步：总控骨架
+说明：
+
+- `move_p` 在这台 NERO 上对可达性很敏感，不是所有笛卡尔位姿都能执行。
+- 当前更稳定的发送方式是：
+  - `--send-order mode_target_mode`
+  - `--mode-resend 3`
+- 现在脚本会同时检查平移和姿态误差，不再只看平移。
+
+### 第 7 步：视觉悬停验证
+
+把目标检测结果转成机械臂基坐标，在目标上方固定高度生成悬停位姿：
+
+```bash
+DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
+python scripts/control/hover_detected_target.py \
+  --camera-serial 241222074755 \
+  --allow-cpu \
+  --calibration-file ./data/calib_run_02/calibration_result.yaml
+```
+
+说明：
+
+- 默认优先抓取 `bottle`，其次 `cup`
+- `cell phone` 会按 `cup` 处理，方便兼容躺倒水杯的误检
+- 目标短暂丢失时会保留一段时间继续使用最近一次结果
+
+按键：
+
+- `g`：单次锁定当前目标并发送一次悬停命令
+- `f`：切换连续跟随模式
+- `q`：退出
+
+真机执行时加 `--go`。连续跟随默认发送上限为 `30Hz`，也可以通过 `--follow-rate-hz` 修改。
+
+### 第 8 步：总控骨架
 
 先 dry-run：
 
@@ -177,6 +249,11 @@ python scripts/control/run_sort_trash_pipeline.py \
 - 机械臂相关脚本现在会优先使用当前仓库内的 `pyAgxArm`
 - 环境文件已去掉旧的绝对路径依赖
 - 已增加总控骨架脚本和示例配置
+- 已增加标准 ChArUco 生成脚本和可打印板
+- 已增加目标悬停脚本 `hover_detected_target.py`
+- 已增加笛卡尔可达性探测脚本 `probe_cartesian_reachability.py`
+- `detect_realsense_yolo_xyz.py` 已支持同时显示 `camera_xyz` 和 `base_xyz`
+- `move_flange_pose.py` 已支持更细的发送顺序调试和姿态误差检查
 
 ## 当前仍然保留为占位的部分
 
