@@ -15,4 +15,3 @@ dependencies:
       - pyrealsense2
       - opencv-contrib-python
       - ultralytics
-      - -e /home/robot/project/控制机械臂垃圾分类项目/pyAgxArm

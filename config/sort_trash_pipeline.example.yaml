@@ -1,0 +1,54 @@
+model: scripts/vision/yolo11s.pt
+calibration_file: config/calibration.identity.yaml
+
+camera:
+  serial: ""
+  width: 1280
+  height: 720
+  fps: 30
+  depth_window_px: 2
+
+workflow:
+  target_labels:
+    - bottle
+    - cup
+  detection_conf: 0.25
+  auto_pick: false
+
+robot:
+  enabled: true
+  channel: can0
+  model: nero
+  speed_percent: 20
+  approach_offset_m: 0.10
+  retreat_offset_m: 0.12
+  grasp_z_offset_m: 0.015
+  pose_rpy_rad:
+    - 3.141593
+    - 0.0
+    - 0.0
+  home_pose:
+    - 0.300
+    - 0.000
+    - 0.280
+    - 3.141593
+    - 0.000000
+    - 0.000000
+
+classes:
+  bottle:
+    drop_pose:
+      - 0.180
+      - -0.220
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000
+  cup:
+    drop_pose:
+      - 0.180
+      - 0.220
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000

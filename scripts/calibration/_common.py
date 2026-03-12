@@ -10,6 +10,25 @@ import numpy as np
 import yaml
 from scipy.spatial.transform import Rotation
 
+ARUCO_DICT_NAMES = [
+    "DICT_4X4_50",
+    "DICT_4X4_100",
+    "DICT_4X4_250",
+    "DICT_4X4_1000",
+    "DICT_5X5_50",
+    "DICT_5X5_100",
+    "DICT_5X5_250",
+    "DICT_5X5_1000",
+    "DICT_6X6_50",
+    "DICT_6X6_100",
+    "DICT_6X6_250",
+    "DICT_6X6_1000",
+    "DICT_7X7_50",
+    "DICT_7X7_100",
+    "DICT_7X7_250",
+    "DICT_7X7_1000",
+]
+
 
 def rpy_to_rot(roll: float, pitch: float, yaw: float) -> np.ndarray:
     cr = math.cos(roll)
@@ -109,6 +128,29 @@ def build_chessboard_object_points(board_cols: int, board_rows: int, square_size
     return obj
 
 
+def get_aruco_dictionary(dict_name: str):
+    if not hasattr(cv2, "aruco"):
+        raise RuntimeError("OpenCV ArUco module is not available in this environment")
+    if not dict_name or not hasattr(cv2.aruco, dict_name):
+        raise ValueError(f"Unsupported ArUco dictionary: {dict_name}")
+    return cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dict_name))
+
+
+def build_charuco_board(
+    board_cols: int,
+    board_rows: int,
+    square_size_mm: float,
+    marker_size_mm: float,
+    aruco_dict_name: str,
+):
+    return cv2.aruco.CharucoBoard(
+        (board_cols, board_rows),
+        square_size_mm / 1000.0,
+        marker_size_mm / 1000.0,
+        get_aruco_dictionary(aruco_dict_name),
+    )
+
+
 def detect_chessboard(gray: np.ndarray, board_cols: int, board_rows: int) -> tuple[bool, np.ndarray | None]:
     pattern = (board_cols, board_rows)
     found, corners = cv2.findChessboardCornersSB(gray, pattern, flags=cv2.CALIB_CB_EXHAUSTIVE)
@@ -125,12 +167,93 @@ def detect_chessboard(gray: np.ndarray, board_cols: int, board_rows: int) -> tup
     return found, corners
 
 
+def detect_charuco(gray: np.ndarray, board) -> tuple[bool, np.ndarray | None, np.ndarray | None, list[np.ndarray], np.ndarray | None]:
+    marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(gray, board.getDictionary())
+    if marker_ids is None or len(marker_ids) == 0:
+        return False, None, None, marker_corners, marker_ids
+    found_count, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
+        marker_corners,
+        marker_ids,
+        gray,
+        board,
+    )
+    found = charuco_corners is not None and charuco_ids is not None and int(found_count) >= 6
+    return found, charuco_corners, charuco_ids, marker_corners, marker_ids
+
+
+def auto_detect_charuco(
+    gray: np.ndarray,
+    board_cols: int,
+    board_rows: int,
+    square_size_mm: float,
+    marker_size_mm: float,
+    candidate_dict_names: list[str] | None = None,
+):
+    best: tuple[int, str, Any, np.ndarray | None, np.ndarray | None, list[np.ndarray], np.ndarray | None] | None = None
+    for dict_name in candidate_dict_names or ARUCO_DICT_NAMES:
+        board = build_charuco_board(board_cols, board_rows, square_size_mm, marker_size_mm, dict_name)
+        found, charuco_corners, charuco_ids, marker_corners, marker_ids = detect_charuco(gray, board)
+        score = 0 if charuco_ids is None else int(len(charuco_ids))
+        if best is None or score > best[0]:
+            best = (score, dict_name, board, charuco_corners, charuco_ids, marker_corners, marker_ids)
+        if found and score >= 12:
+            break
+    if best is None:
+        return False, None, None, None, None, None, None
+    score, dict_name, board, charuco_corners, charuco_ids, marker_corners, marker_ids = best
+    found = charuco_corners is not None and charuco_ids is not None and score >= 6
+    return found, dict_name, board, charuco_corners, charuco_ids, marker_corners, marker_ids
+
+
+def match_charuco_image_points(board, charuco_corners: np.ndarray, charuco_ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    object_points, image_points = board.matchImagePoints(charuco_corners, charuco_ids)
+    return (
+        object_points.reshape(-1, 3).astype(np.float32),
+        image_points.reshape(-1, 2).astype(np.float32),
+    )
+
+
 def solve_pnp(
     corners: np.ndarray,
     object_points: np.ndarray,
     camera_matrix: np.ndarray,
     dist_coeffs: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
+    object_points = np.asarray(object_points, dtype=np.float32)
+    corners = np.asarray(corners, dtype=np.float32)
+    is_planar = np.ptp(object_points[:, 2]) < 1e-6
+
+    if is_planar and len(object_points) >= 4:
+        ok, rvecs, tvecs, reproj = cv2.solvePnPGeneric(
+            object_points,
+            corners,
+            camera_matrix,
+            dist_coeffs,
+            flags=cv2.SOLVEPNP_IPPE,
+        )
+        if ok and rvecs:
+            best: tuple[float, np.ndarray, np.ndarray] | None = None
+            for idx, (rvec, tvec) in enumerate(zip(rvecs, tvecs)):
+                rot, _ = cv2.Rodrigues(rvec)
+                pts_cam = (rot @ object_points.T).T + tvec.reshape(1, 3)
+                if np.any(pts_cam[:, 2] <= 0.0):
+                    continue
+                score = float(reproj[idx][0]) if reproj is not None else float(np.mean(pts_cam[:, 2]))
+                if best is None or score < best[0]:
+                    best = (score, rvec, tvec)
+            if best is not None:
+                rvec, tvec = best[1], best[2]
+                if hasattr(cv2, "solvePnPRefineLM"):
+                    rvec, tvec = cv2.solvePnPRefineLM(
+                        object_points,
+                        corners,
+                        camera_matrix,
+                        dist_coeffs,
+                        rvec,
+                        tvec,
+                    )
+                return rvec, tvec
+
     ok, rvec, tvec = cv2.solvePnP(
         object_points,
         corners,
@@ -140,6 +263,15 @@ def solve_pnp(
     )
     if not ok:
         raise RuntimeError("solvePnP failed")
+    if hasattr(cv2, "solvePnPRefineLM"):
+        rvec, tvec = cv2.solvePnPRefineLM(
+            object_points,
+            corners,
+            camera_matrix,
+            dist_coeffs,
+            rvec,
+            tvec,
+        )
     return rvec, tvec
 
 
@@ -208,4 +340,3 @@ def require_output_dir(path: Path) -> None:
 def camera_matrix_and_dist_from_manifest(manifest: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     intrinsics = manifest["camera_intrinsics"]
     return intrinsics_to_matrix(intrinsics), np.array(intrinsics["coeffs"], dtype=np.float64)
-
