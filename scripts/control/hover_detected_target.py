@@ -71,10 +71,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--hover-height-m", type=float, default=0.30, help="Hover offset above detected base Z")
     parser.add_argument(
+        "--base-offset-m",
+        nargs=3,
+        type=float,
+        default=[0.0, 0.0, 0.0],
+        metavar=("DX", "DY", "DZ"),
+        help="Initial base-frame XYZ offset applied before hover height; can also be tuned at runtime via keys.",
+    )
+    parser.add_argument(
+        "--offset-step-m",
+        type=float,
+        default=0.01,
+        help="Offset step size for runtime keyboard tuning.",
+    )
+    parser.add_argument(
         "--pose-rpy-deg",
         nargs=3,
         type=float,
-        default=[90.0, -60.0, 0.0],
+        default=[90.0, -90.0, 0.0],
         metavar=("ROLL", "PITCH", "YAW"),
         help="Fixed hover orientation in degrees",
     )
@@ -252,15 +266,19 @@ def overlay_lines(
     *,
     follow_enabled: bool,
     follow_rate_hz: float,
+    base_offset_m: list[float],
+    offset_step_m: float,
 ) -> list[str]:
     lines = [
         "Hover target above detected object",
         f"calibration={calibration_path.name}",
         f"mode={'go' if go else 'dry-run'}",
         f"follow={'ON' if follow_enabled else 'OFF'} @{follow_rate_hz:.1f}Hz",
+        f"offset=({base_offset_m[0]:.3f}, {base_offset_m[1]:.3f}, {base_offset_m[2]:.3f}) step={offset_step_m:.3f}m",
     ]
     if row is None or hover_pose is None:
         lines.append("No valid target")
+        lines.append("Offset keys: a/d=X-/X+, w/s=Y+/Y-, r/v=Z+/Z-, x=reset")
         lines.append("Press f to toggle follow, g for single-shot, q to quit")
         return lines
     cam = row["camera_xyz_m"]
@@ -280,6 +298,7 @@ def overlay_lines(
     if debug_rows:
         debug_text = ", ".join(f"{r['class_name']}:{float(r['confidence']):.2f}" for r in debug_rows)
         lines.append(f"top={debug_text}")
+    lines.append("Offset keys: a/d=X-/X+, w/s=Y+/Y-, r/v=Z+/Z-, x=reset")
     lines.append("Press f to toggle follow, g for single-shot, q to quit")
     return lines
 
@@ -306,6 +325,7 @@ def main() -> int:
     target_label_set = set(target_labels)
     target_priority = {label: idx for idx, label in enumerate(target_labels)}
     pose_rpy_rad = [float(np.deg2rad(v)) for v in args.pose_rpy_deg]
+    base_offset_m = [float(v) for v in args.base_offset_m]
     output_path = Path(args.save_json).expanduser().resolve() if args.save_json else None
     output_handle = output_path.open("a", encoding="utf-8") if output_path else None
 
@@ -374,9 +394,9 @@ def main() -> int:
             if best is not None:
                 base = best["base_xyz_m"]
                 hover_pose = [
-                    float(base[0]),
-                    float(base[1]),
-                    float(base[2] + args.hover_height_m),
+                    float(base[0] + base_offset_m[0]),
+                    float(base[1] + base_offset_m[1]),
+                    float(base[2] + base_offset_m[2] + args.hover_height_m),
                     *pose_rpy_rad,
                 ]
                 last_valid_row = clone_row(best)
@@ -401,6 +421,8 @@ def main() -> int:
                     debug_rows,
                     follow_enabled=follow_enabled,
                     follow_rate_hz=args.follow_rate_hz,
+                    base_offset_m=base_offset_m,
+                    offset_step_m=args.offset_step_m,
                 ),
             )
 
@@ -433,6 +455,33 @@ def main() -> int:
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
+            offset_changed = False
+            if key == ord("a"):
+                base_offset_m[0] -= args.offset_step_m
+                offset_changed = True
+            elif key == ord("d"):
+                base_offset_m[0] += args.offset_step_m
+                offset_changed = True
+            elif key == ord("w"):
+                base_offset_m[1] += args.offset_step_m
+                offset_changed = True
+            elif key == ord("s"):
+                base_offset_m[1] -= args.offset_step_m
+                offset_changed = True
+            elif key == ord("r"):
+                base_offset_m[2] += args.offset_step_m
+                offset_changed = True
+            elif key == ord("v"):
+                base_offset_m[2] -= args.offset_step_m
+                offset_changed = True
+            elif key == ord("x"):
+                base_offset_m = [float(v) for v in args.base_offset_m]
+                offset_changed = True
+            if offset_changed:
+                print(
+                    "Updated base offset (m):",
+                    [round(base_offset_m[0], 4), round(base_offset_m[1], 4), round(base_offset_m[2], 4)],
+                )
             toggle_follow = key == ord("f") and last_key != ord("f")
             trigger_hover = key == ord("g") and last_key != ord("g")
             last_key = key
