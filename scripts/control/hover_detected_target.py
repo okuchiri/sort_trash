@@ -15,6 +15,7 @@ from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _local_sdk import prefer_local_pyagxarm
+from _safety import check_pose_min_z
 
 prefer_local_pyagxarm(__file__)
 
@@ -499,16 +500,17 @@ def main() -> int:
                     if enabled_states is None or not all(enabled_states):
                         print(f"Follow mode skipped send; joints not enabled: {enabled_states}")
                     else:
-                        send_hover_pose(robot, [float(v) for v in hover_pose], args.send_order, args.mode_resend)
-                        last_follow_send_ts = now
-                        if now - last_follow_print_ts >= 1.0:
-                            label_text = str(best["class_name"])
-                            if best.get("target_name") and best["target_name"] != best["class_name"]:
-                                label_text = f"{best['class_name']}->{best['target_name']}"
-                            if bool(best.get("stale")):
-                                label_text += " stale"
-                            print(f"Follow command sent: {label_text} hover_pose={[float(v) for v in hover_pose]}")
-                            last_follow_print_ts = now
+                        if check_pose_min_z(hover_pose, "hover_pose"):
+                            send_hover_pose(robot, [float(v) for v in hover_pose], args.send_order, args.mode_resend)
+                            last_follow_send_ts = now
+                            if now - last_follow_print_ts >= 1.0:
+                                label_text = str(best["class_name"])
+                                if best.get("target_name") and best["target_name"] != best["class_name"]:
+                                    label_text = f"{best['class_name']}->{best['target_name']}"
+                                if bool(best.get("stale")):
+                                    label_text += " stale"
+                                print(f"Follow command sent: {label_text} hover_pose={[float(v) for v in hover_pose]}")
+                                last_follow_print_ts = now
 
             if trigger_hover and best is not None and hover_pose is not None:
                 locked_hover_pose = [float(v) for v in hover_pose]
@@ -519,6 +521,8 @@ def main() -> int:
                     label_text += " stale"
                 print(f"Selected target: {label_text} hover_pose={locked_hover_pose}")
                 if robot is not None:
+                    if not check_pose_min_z(locked_hover_pose, "hover_pose"):
+                        continue
                     enabled_states = ensure_robot_enabled(robot)
                     print(f"Enabled joints before send: {enabled_states}")
                     before_pose = read_flange_pose(robot, timeout_s=1.0)

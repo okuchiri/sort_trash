@@ -12,6 +12,7 @@ from typing import Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _local_sdk import prefer_local_pyagxarm
+from _safety import check_pose_min_z
 
 prefer_local_pyagxarm(__file__)
 
@@ -100,6 +101,9 @@ def print_pose(label: str, pose: Sequence[float]) -> None:
 
 
 def send_pose(robot: object, target_pose: Sequence[float], send_order: str, mode_resend: int) -> None:
+    if not check_pose_min_z(list(target_pose), "probe_pose"):
+        raise RuntimeError("Blocked by minimum z safety guard.")
+
     def send_mode_p() -> None:
         for _ in range(max(1, mode_resend)):
             robot.set_motion_mode("p")
