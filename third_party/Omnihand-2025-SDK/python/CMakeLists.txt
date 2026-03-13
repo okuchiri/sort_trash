@@ -35,7 +35,7 @@ add_custom_command(
   TARGET ${CUR_TARGET_NAME}
   POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:omnihand2025> ${PYTHON_PKG_DIR}/omnihand_2025/
-  COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/thirdParty/usbcanfd_libusb_x64_1.0.10_250328/libusbcanfd.so.1.0.10 ${PYTHON_PKG_DIR}/omnihand_2025/
+  COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_SOURCE_DIR}/thirdParty/usbcanfd_libusb_x64_1.0.10_250328/libusbcanfd.so ${PYTHON_PKG_DIR}/omnihand_2025/libusbcanfd.so.1.0.10
   COMMAND ${CMAKE_COMMAND} -E create_symlink libusbcanfd.so.1.0.10 ${PYTHON_PKG_DIR}/omnihand_2025/libusbcanfd.so.1
   COMMAND ${CMAKE_COMMAND} -E create_symlink libusbcanfd.so.1.0.10 ${PYTHON_PKG_DIR}/omnihand_2025/libusbcanfd.so
 )

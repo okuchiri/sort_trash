@@ -87,7 +87,19 @@ PYBIND11_MODULE(omnihand_2025_core, m) {
   py::class_<AgibotHandO10>(m, "AgibotHandO10")
       .def_static(
           "create_hand",
-          [](unsigned char device_id, unsigned char canfd_id, int hand_type) {
+          [](unsigned char device_id,
+             unsigned char canfd_id,
+             int hand_type,
+             const std::string& transport,
+             const std::string& uart_port,
+             int uart_baudrate) {
+            if (transport == "serial" || transport == "rs485" || transport == "uart") {
+              return AgibotHandO10::createHandSerial(
+                  device_id,
+                  uart_port,
+                  uart_baudrate,
+                  static_cast<EHandType>(hand_type));
+            }
             return AgibotHandO10::createHand(
                 device_id,
                 canfd_id,
@@ -95,7 +107,10 @@ PYBIND11_MODULE(omnihand_2025_core, m) {
           },
           py::arg("device_id") = DEFAULT_DEVICE_ID,
           py::arg("canfd_id") = 0,
-          py::arg("hand_type") = 0)
+          py::arg("hand_type") = 0,
+          py::arg("transport") = "can",
+          py::arg("uart_port") = "/dev/ttyUSB0",
+          py::arg("uart_baudrate") = 460800)
       .def("set_device_id", &AgibotHandO10::SetDeviceId)
       .def("get_vendor_info", &AgibotHandO10::GetVendorInfo)
       .def("get_device_info", &AgibotHandO10::GetDeviceInfo)

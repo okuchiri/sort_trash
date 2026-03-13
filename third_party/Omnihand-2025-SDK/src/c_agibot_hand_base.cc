@@ -45,3 +45,18 @@ std::unique_ptr<AgibotHandO10> AgibotHandO10::createHand(
 
   return hand;
 }
+
+std::unique_ptr<AgibotHandO10> AgibotHandO10::createHandSerial(
+    unsigned char device_id,
+    const std::string& uart_port,
+    int32_t uart_baudrate,
+    EHandType hand_type) {
+  AgibotHandRsO10::Options options;
+  options.uart_port = uart_port;
+  options.uart_baudrate = uart_baudrate;
+
+  std::unique_ptr<AgibotHandO10> hand = std::make_unique<AgibotHandRsO10>(options);
+  hand->Reset(device_id, hand_type);
+
+  return hand;
+}
