@@ -17,6 +17,7 @@ from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _local_sdk import prefer_local_pyagxarm
+from omnihand_2025_controller import build_omnihand_controller, OmniHandController
 
 prefer_local_pyagxarm(__file__)
 
@@ -229,30 +230,50 @@ def move_pose(robot: Any, pose: list[float], execute: bool, label: str) -> None:
         time.sleep(0.3)
 
 
-def open_hand(execute: bool) -> None:
-    message = "OmniHand open placeholder"
-    print(message if not execute else f"{message}: TODO wire SDK call")
-    time.sleep(0.1)
+def open_hand(hand: OmniHandController | None, execute: bool) -> None:
+    if hand is None:
+        message = "OmniHand open skipped (hand disabled or --go not set)"
+        print(message)
+        time.sleep(0.1)
+        return
+    if not execute:
+        print("OmniHand open skipped (dry-run)")
+        time.sleep(0.1)
+        return
+    hand.open()
 
 
-def close_hand(execute: bool) -> None:
-    message = "OmniHand close placeholder"
-    print(message if not execute else f"{message}: TODO wire SDK call")
-    time.sleep(0.1)
+def close_hand(hand: OmniHandController | None, execute: bool) -> None:
+    if hand is None:
+        message = "OmniHand close skipped (hand disabled or --go not set)"
+        print(message)
+        time.sleep(0.1)
+        return
+    if not execute:
+        print("OmniHand close skipped (dry-run)")
+        time.sleep(0.1)
+        return
+    hand.close()
 
 
-def execute_plan(plan: TargetPlan, robot: Any, config: dict[str, Any], execute: bool) -> None:
+def execute_plan(
+    plan: TargetPlan,
+    robot: Any,
+    hand: OmniHandController | None,
+    config: dict[str, Any],
+    execute: bool,
+) -> None:
     robot_cfg = config.get("robot", {})
     home_pose = robot_cfg.get("home_pose")
     if home_pose:
         move_pose(robot, [float(v) for v in home_pose], execute, "home_pose")
-    open_hand(execute)
+    open_hand(hand, execute)
     move_pose(robot, plan.approach_pose, execute, "approach_pose")
     move_pose(robot, plan.grasp_pose, execute, "grasp_pose")
-    close_hand(execute)
+    close_hand(hand, execute)
     move_pose(robot, plan.retreat_pose, execute, "retreat_pose")
     move_pose(robot, plan.drop_pose, execute, f"drop_pose[{plan.label}]")
-    open_hand(execute)
+    open_hand(hand, execute)
     if home_pose:
         move_pose(robot, [float(v) for v in home_pose], execute, "return_home_pose")
 
@@ -350,6 +371,7 @@ def main() -> int:
     if args.go and bool(robot_cfg.get("enabled", True)):
         robot = build_robot(robot_cfg)
         prepare_robot(robot, robot_cfg)
+    hand = build_omnihand_controller(config.get("hand", {}), execute=args.go)
 
     pipeline, align, _profile, intrinsics = build_camera(config.get("camera", {}))
     window_name = "run_sort_trash_pipeline"
@@ -390,7 +412,7 @@ def main() -> int:
                 continue
             print_plan(plan)
             if robot is not None:
-                execute_plan(plan, robot, config, args.go)
+                execute_plan(plan, robot, hand, config, args.go)
             else:
                 print("Dry run: robot motion was not executed.")
             executed_once = True

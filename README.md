@@ -257,5 +257,5 @@ python scripts/control/run_sort_trash_pipeline.py \
 
 ## 当前仍然保留为占位的部分
 
-- OmniHand 真实开合控制还没接入 SDK
+- OmniHand 需要安装官方 Python SDK，并在 `hand` 配置里填好开合角度后才能 `--go`
 - `run_sort_trash_pipeline.py` 目前是单目标 pick/place 骨架，不是完整生产流程
