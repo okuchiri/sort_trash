@@ -12,6 +12,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _local_sdk import prefer_local_pyagxarm
+from _safety import check_pose_min_z
 
 prefer_local_pyagxarm(__file__)
 
@@ -250,6 +251,9 @@ def main() -> int:
     print(f"Speed percent: {args.speed_percent}")
     if any(abs(v) > 5.0 for v in target_pose_input[:3]):
         print("Warning: x/y/z look large. Units are meters. If your UI shows mm, pass --mm.")
+    if not check_pose_min_z(target_flange_pose, f"{args.target_frame}_pose"):
+        print("Blocked by minimum z safety guard.")
+        return 1
 
     if not args.go:
         print("Dry run: pass --go to send robot.enable()/robot.move_p().")

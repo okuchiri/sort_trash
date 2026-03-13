@@ -18,6 +18,7 @@ from ultralytics import YOLO
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _local_sdk import prefer_local_pyagxarm
 from omnihand_2025_controller import build_omnihand_controller, OmniHandController
+from _safety import check_pose_min_z
 
 prefer_local_pyagxarm(__file__)
 
@@ -225,6 +226,8 @@ def prepare_robot(robot: Any, robot_cfg: dict[str, Any]) -> None:
 
 def move_pose(robot: Any, pose: list[float], execute: bool, label: str) -> None:
     print(f"{label}: {pose}")
+    if not check_pose_min_z(pose, label):
+        raise SystemExit(f"Blocked by minimum z safety guard at {label}.")
     if execute:
         robot.move_p(pose)
         time.sleep(0.3)
