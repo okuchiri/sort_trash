@@ -7,11 +7,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _local_sdk import prefer_local_pyagxarm
-from omnihand_2025_controller import OmniHandController
+from omnihand_actions import create_actions, load_hand_config
 
 prefer_local_pyagxarm(__file__)
 
@@ -50,24 +48,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_yaml(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle)
-    if not isinstance(data, dict):
-        raise SystemExit(f"YAML root must be a mapping: {path}")
-    return data
-
-
-def load_hand_config(path: Path) -> dict[str, Any]:
-    data = load_yaml(path)
-    hand_cfg = data.get("hand") if "hand" in data else data
-    if not isinstance(hand_cfg, dict):
-        raise SystemExit(f"Expected a hand config mapping in: {path}")
-    cfg = dict(hand_cfg)
-    cfg["enabled"] = True
-    return cfg
-
-
 def print_config_summary(cfg: dict[str, Any], path: Path) -> None:
     print(f"Config file: {path}")
     print(f"transport: {cfg.get('transport', 'can')}")
@@ -97,26 +77,26 @@ def main() -> int:
         print("Dry run: pass --go to connect and send OmniHand commands.")
         return 0
 
-    controller = OmniHandController(hand_cfg, execute=True)
+    controller = create_actions(hand_cfg, execute=True)
     print("OmniHand connected.")
 
     if args.action == "open":
         print("Sending open command...")
-        controller.open()
+        controller.open_hand()
     elif args.action == "close":
         print("Sending close command...")
-        controller.close()
+        controller.close_hand()
     else:
         print("Sending open command...")
-        controller.open()
+        controller.open_hand()
         if args.pause_seconds > 0:
             time.sleep(args.pause_seconds)
         print("Sending close command...")
-        controller.close()
+        controller.close_hand()
         if args.pause_seconds > 0:
             time.sleep(args.pause_seconds)
         print("Sending open command...")
-        controller.open()
+        controller.open_hand()
 
     print("OmniHand smoke test complete.")
     return 0
