@@ -13,12 +13,13 @@
 建议在Ubuntu22.04操作系统下运行。
 如果是在WSL2中，需要将windows宿主机的USB接口Attach到虚拟机，以BUSID为2-2为例：
 ```bash
-usbipd list#查看当前连接的USB
-usbipd bind --busid 2-2#若State为Not shared，则执行这一步
+usbipd list
+usbipd bind --busid 2-2
 usbipd attach --wsl --busid 2-2
 ```
+检查state，若为Attached则成功
 ```bash
-usbipd list#检查state，若为Attached则成功
+usbipd list
 ```
 
 ## 项目架构
