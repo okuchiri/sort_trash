@@ -37,7 +37,7 @@ from _common import (  # type: ignore[no-redef]
 import pyrealsense2 as rs
 
 CLASS_ALIASES = {
-    "cell phone": "cup",
+    "cell phone": "bottle",
 }
 
 DEFAULT_TARGET_LABELS = ["bottle", "cup"]

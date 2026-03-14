@@ -333,7 +333,7 @@ python scripts/control/hover_detected_target.py \
 说明：
 
 - 默认优先抓取 `bottle`，其次 `cup`
-- `cell phone` 会按 `cup` 处理，方便兼容躺倒水杯的误检
+- `cell phone` 会按 `bottle` 处理，方便兼容当前场景中的误检
 - 目标短暂丢失时会保留一段时间继续使用最近一次结果
 - 当前默认姿态已经改成 `rx=90, ry=-90, rz=0`
 - 支持运行时手动调偏移：

@@ -39,7 +39,7 @@ import pyrealsense2 as rs
 
 
 CLASS_ALIASES = {
-    "cell phone": "cup",
+    "cell phone": "bottle",
 }
 DEFAULT_TARGET_LABELS = ["bottle", "cup"]
 DEFAULT_TASK_POSES_PATH = Path(__file__).resolve().parents[2] / "config" / "task_poses.yaml"
@@ -77,7 +77,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--drop-hover-z-m", type=float, default=0.25, help="Fixed hover z above the drop box")
     parser.add_argument("--drop-z-m", type=float, default=0.15, help="Fixed down/release z over the drop box")
-    parser.add_argument("--base-offset-m", nargs=3, type=float, default=[0.0, 0.0, 0.0], metavar=("DX", "DY", "DZ"))
+    parser.add_argument(
+        "--base-offset-m",
+        nargs=3,
+        type=float,
+        default=[0.0, -0.05, 0.0],
+        metavar=("DX", "DY", "DZ"),
+        help="Empirical base-frame XYZ correction applied to target hover/pregrasp poses. Current default adds -5 cm on Y.",
+    )
     parser.add_argument(
         "--pose-rpy-deg",
         nargs=3,
