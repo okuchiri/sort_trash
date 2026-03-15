@@ -15,3 +15,51 @@ drop_poses:
     updated_at: '2026-03-13T19:18:31+08:00'
     channel: can0
     robot: nero
+  drink_can:
+    xy:
+    - -0.18
+    - -0.02
+    frame: flange
+    updated_at: placeholder
+    channel: can0
+    robot: nero
+  paper:
+    xy:
+    - -0.08
+    - 0.12
+    frame: flange
+    updated_at: placeholder
+    channel: can0
+    robot: nero
+  cardboard:
+    xy:
+    - -0.08
+    - -0.12
+    frame: flange
+    updated_at: placeholder
+    channel: can0
+    robot: nero
+  plastic_bag:
+    xy:
+    - 0.04
+    - 0.22
+    frame: flange
+    updated_at: placeholder
+    channel: can0
+    robot: nero
+  food_waste:
+    xy:
+    - 0.04
+    - 0.02
+    frame: flange
+    updated_at: placeholder
+    channel: can0
+    robot: nero
+  other_trash:
+    xy:
+    - 0.04
+    - -0.22
+    frame: flange
+    updated_at: placeholder
+    channel: can0
+    robot: nero

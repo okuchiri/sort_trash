@@ -9,6 +9,10 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _local_ultralytics import maybe_enable_binaryattention
+
 from ultralytics import YOLO
 
 from _common import build_pipeline, default_model_path, detection_rows, put_lines, resolve_device, resolve_path
@@ -35,6 +39,7 @@ def main() -> int:
     if not model_path.exists():
         raise SystemExit(f"Model file does not exist: {model_path}")
     device = resolve_device(args.device, args.allow_cpu)
+    maybe_enable_binaryattention(__file__, model_path, verbose=True)
     model = YOLO(str(model_path))
     pipeline, _align, _profile = build_pipeline(
         camera_serial=args.camera_serial,

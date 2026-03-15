@@ -11,6 +11,14 @@ from pathlib import Path
 import cv2
 import numpy as np
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _local_ultralytics import maybe_enable_binaryattention
+from trash_labels import (
+    DEFAULT_ACTIVE_TARGET_LABELS,
+    normalize_requested_target_labels,
+    resolve_target_name,
+)
 from ultralytics import YOLO
 
 from _common import (
@@ -43,14 +51,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-labels",
         nargs="*",
-        default=["cup", "bottle"],
-        help="Class names to keep. Defaults to cup bottle.",
+        default=DEFAULT_ACTIVE_TARGET_LABELS,
+        help="Semantic target labels to keep after raw model outputs are mapped into unified trash labels.",
     )
     parser.add_argument(
         "--keep-last-seconds",
         type=float,
         default=0.8,
-        help="Keep showing the last valid cup/bottle result for this many seconds when detection flickers.",
+        help="Keep showing the last valid mapped target for this many seconds when detection flickers.",
     )
     parser.add_argument(
         "--calibration-file",
@@ -59,6 +67,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--save-json", default="", help="Optional JSONL file for XYZ detections")
     return parser.parse_args()
+
+
+def format_target_label(row: dict[str, object]) -> str:
+    label_text = str(row["class_name"])
+    if row.get("target_name") and row["target_name"] != row["class_name"]:
+        label_text = f"{row['class_name']}->{row['target_name']}"
+    return label_text
 
 
 def load_base_to_camera(path_str: str) -> tuple[Path, np.ndarray]:
@@ -98,7 +113,7 @@ def draw_target_box(
     cv2.circle(image, (cx, cy), 5, color, -1)
     cv2.drawMarker(image, (cx, cy), color, cv2.MARKER_CROSS, 18, 2)
 
-    title = f"{row['class_name']} conf={float(row['confidence']):.2f}"
+    title = f"{format_target_label(row)} conf={float(row['confidence']):.2f}"
     if stale:
         title += " stale"
     elif fallback:
@@ -118,12 +133,17 @@ def draw_target_box(
     cv2.putText(image, detail, (x1, max(48, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
 
-def build_overlay_lines(rows: list[dict[str, object]], calibration_path: Path | None) -> list[str]:
+def build_overlay_lines(
+    rows: list[dict[str, object]],
+    calibration_path: Path | None,
+    *,
+    target_labels: list[str],
+) -> list[str]:
     if not rows:
         lines = [
             "Step 3: YOLO + depth -> camera XYZ",
-            "targets=cup,bottle",
-            "No cup/bottle detected",
+            f"targets={','.join(target_labels)}",
+            "No mapped target detected",
         ]
         if calibration_path is not None:
             lines.append(f"base frame={calibration_path.name}")
@@ -139,8 +159,8 @@ def build_overlay_lines(rows: list[dict[str, object]], calibration_path: Path | 
         status = "fallback"
     lines = [
         "Step 3: YOLO + depth -> camera XYZ",
-        f"targets={','.join(sorted({str(row['class_name']) for row in rows}))}",
-        f"{status}={best['class_name']} conf={float(best['confidence']):.2f} pixel={center_xy}",
+        f"targets={','.join(target_labels)}",
+        f"{status}={format_target_label(best)} conf={float(best['confidence']):.2f} pixel={center_xy}",
     ]
     if best.get("camera_xyz_m") is None:
         lines.append("depth=NA cam=NA")
@@ -180,6 +200,7 @@ def main() -> int:
     if not model_path.exists():
         raise SystemExit(f"Model file does not exist: {model_path}")
     device = resolve_device(args.device, args.allow_cpu)
+    maybe_enable_binaryattention(__file__, model_path, verbose=True)
     model = YOLO(str(model_path))
     calibration_path = None
     base_to_camera = None
@@ -197,7 +218,15 @@ def main() -> int:
 
     output_path = Path(args.save_json).expanduser().resolve() if args.save_json else None
     output_handle = output_path.open("a", encoding="utf-8") if output_path else None
-    target_labels = set(args.target_labels)
+    try:
+        normalized_target_labels = normalize_requested_target_labels(
+            args.target_labels,
+            default=DEFAULT_ACTIVE_TARGET_LABELS,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    target_labels = set(normalized_target_labels)
+    target_priority = {label: idx for idx, label in enumerate(normalized_target_labels)}
     window_name = "detect_realsense_yolo_xyz"
     last_print_s = 0.0
     last_primary: dict[str, object] | None = None
@@ -224,8 +253,11 @@ def main() -> int:
             all_rows = []
             target_rows = []
             for row in detection_rows(result):
-                if target_labels and row["class_name"] not in target_labels:
-                    all_rows.append(row)
+                row["target_name"] = resolve_target_name(str(row["class_name"]))
+                all_rows.append(row)
+                if row["target_name"] is None:
+                    continue
+                if target_labels and row["target_name"] not in target_labels:
                     continue
                 cx, cy = [int(v) for v in row["center_xy"]]
                 depth_m = sample_depth_m(depth_frame, cx, cy, args.depth_window)
@@ -240,7 +272,12 @@ def main() -> int:
                 row["camera_xyz_m"] = [float(v) for v in point_xyz] if point_xyz is not None else None
                 row["base_xyz_m"] = [float(v) for v in point_base] if point_base is not None else None
                 target_rows.append(row)
-            target_rows.sort(key=lambda row: float(row["confidence"]), reverse=True)
+            target_rows.sort(
+                key=lambda row: (
+                    target_priority.get(str(row.get("target_name")), len(target_priority)),
+                    -float(row["confidence"]),
+                )
+            )
             all_rows.sort(key=lambda row: float(row["confidence"]), reverse=True)
 
             rows = target_rows
@@ -277,7 +314,7 @@ def main() -> int:
             if rows and now - last_print_s >= 1.0:
                 best = rows[0]
                 print(
-                    f"{best['class_name']} conf={best['confidence']:.3f} "
+                    f"{format_target_label(best)} conf={best['confidence']:.3f} "
                     f"pixel={best['center_xy']} depth={best['depth_m']:.3f} "
                     f"camera_xyz={best['camera_xyz_m']} "
                     f"base_xyz={best.get('base_xyz_m')}"
@@ -286,7 +323,7 @@ def main() -> int:
 
             annotated = put_lines(
                 annotated,
-                build_overlay_lines(rows, calibration_path),
+                build_overlay_lines(rows, calibration_path, target_labels=normalized_target_labels),
             )
             cv2.imshow(window_name, annotated)
             if cv2.waitKey(1) & 0xFF == ord("q"):

@@ -13,6 +13,7 @@ SCRIPTS_DIR = ROOT_DIR / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from _local_ultralytics import maybe_enable_binaryattention
 from _local_sdk import prefer_local_pyagxarm
 
 prefer_local_pyagxarm(__file__)
@@ -23,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="", help="Optional pipeline config to validate")
     parser.add_argument("--try-camera", action="store_true", help="Attempt to enumerate RealSense devices")
     parser.add_argument("--try-model", action="store_true", help="Attempt to load the configured YOLO model")
+    parser.add_argument("--try-binaryattn", action="store_true", help="Attempt to import and register the local BinaryAttention prototype")
     return parser.parse_args()
 
 
@@ -98,23 +100,32 @@ def try_camera_enum() -> tuple[bool, str]:
 
 
 def try_model_load(config_path: Path) -> tuple[bool, str]:
-    try:
-        from ultralytics import YOLO
-    except Exception as exc:
-        return False, str(exc)
-
     with config_path.open("r", encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     model_path = Path(config["model"])
     if not model_path.is_absolute():
         model_path = (ROOT_DIR / model_path).resolve()
-    if not model_path.exists():
+    maybe_enable_binaryattention(__file__, model_path, config_path, verbose=False)
+    try:
+        from ultralytics import YOLO
+    except Exception as exc:
+        return False, str(exc)
+    if not model_path.exists() and model_path.suffix != ".yaml":
         return False, f"missing model: {model_path}"
     try:
         YOLO(str(model_path))
     except Exception as exc:
         return False, str(exc)
     return True, f"loaded={model_path}"
+
+
+def try_binaryattn_import() -> tuple[bool, str]:
+    try:
+        maybe_enable_binaryattention(__file__, "binaryattn", verbose=False)
+        from third_party.ultralytics_binaryattn import register_binaryattention
+    except Exception as exc:
+        return False, str(exc)
+    return True, f"register={register_binaryattention.__module__}"
 
 
 def main() -> int:
@@ -142,6 +153,9 @@ def main() -> int:
     if args.try_camera:
         ok, detail = try_camera_enum()
         checks.append(("camera-enum", ok, detail))
+    if args.try_binaryattn:
+        ok, detail = try_binaryattn_import()
+        checks.append(("binaryattn-import", ok, detail))
     if args.try_model:
         if config_path is None:
             checks.append(("model-load", False, "--config is required with --try-model"))

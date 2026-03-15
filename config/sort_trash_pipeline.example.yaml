@@ -1,4 +1,4 @@
-model: scripts/vision/yolo11s.pt
+model: yolo26s.pt
 calibration_file: config/calibration.identity.yaml
 
 camera:
@@ -12,6 +12,7 @@ workflow:
   target_labels:
     - bottle
     - cup
+    - drink_can
   detection_conf: 0.25
   auto_pick: false
 
@@ -81,6 +82,54 @@ classes:
     drop_pose:
       - 0.180
       - 0.220
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000
+  drink_can:
+    drop_pose:
+      - 0.220
+      - 0.000
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000
+  paper:
+    drop_pose:
+      - 0.260
+      - 0.120
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000
+  cardboard:
+    drop_pose:
+      - 0.260
+      - -0.120
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000
+  plastic_bag:
+    drop_pose:
+      - 0.120
+      - 0.320
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000
+  food_waste:
+    drop_pose:
+      - 0.120
+      - 0.080
+      - 0.220
+      - 3.141593
+      - 0.000000
+      - 0.000000
+  other_trash:
+    drop_pose:
+      - 0.120
+      - -0.320
       - 0.220
       - 3.141593
       - 0.000000

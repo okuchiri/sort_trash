@@ -13,12 +13,18 @@ import numpy as np
 import pyrealsense2 as rs
 import torch
 import yaml
-from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _local_ultralytics import maybe_enable_binaryattention
 from _local_sdk import prefer_local_pyagxarm
 from omnihand_2025_controller import build_omnihand_controller, OmniHandController
 from _safety import check_pose_min_z
+from trash_labels import (
+    DEFAULT_ACTIVE_TARGET_LABELS,
+    normalize_requested_target_labels,
+    resolve_target_name,
+)
+from ultralytics import YOLO
 
 prefer_local_pyagxarm(__file__)
 
@@ -26,6 +32,7 @@ prefer_local_pyagxarm(__file__)
 @dataclass
 class TargetPlan:
     label: str
+    raw_label: str
     confidence: float
     pixel_xy: tuple[int, int]
     depth_m: float
@@ -126,7 +133,15 @@ def choose_target(
     classes_cfg = config.get("classes", {})
     workflow_cfg = config.get("workflow", {})
     robot_cfg = config.get("robot", {})
-    target_labels = set(workflow_cfg.get("target_labels", []))
+    try:
+        normalized_target_labels = normalize_requested_target_labels(
+            workflow_cfg.get("target_labels"),
+            default=DEFAULT_ACTIVE_TARGET_LABELS,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"Invalid workflow.target_labels: {exc}") from exc
+    target_labels = set(normalized_target_labels)
+    target_priority = {label: idx for idx, label in enumerate(normalized_target_labels)}
     depth_window = int(config.get("camera", {}).get("depth_window_px", 2))
     fixed_rpy = [float(v) for v in robot_cfg.get("pose_rpy_rad", [3.141593, 0.0, 0.0])]
 
@@ -136,13 +151,16 @@ def choose_target(
 
     names = result.names
     best_plan = None
-    best_score = -1.0
+    best_rank = (len(target_priority), float("inf"))
     for box in boxes:
         cls_idx = int(box.cls[0])
-        label = str(names[cls_idx])
-        if target_labels and label not in target_labels:
+        raw_label = str(names[cls_idx])
+        target_name = resolve_target_name(raw_label)
+        if target_name is None:
             continue
-        class_cfg = classes_cfg.get(label)
+        if target_labels and target_name not in target_labels:
+            continue
+        class_cfg = classes_cfg.get(target_name)
         if not isinstance(class_cfg, dict) or "drop_pose" not in class_cfg:
             continue
 
@@ -173,7 +191,8 @@ def choose_target(
         drop_pose = [float(v) for v in class_cfg["drop_pose"]]
 
         plan = TargetPlan(
-            label=label,
+            label=target_name,
+            raw_label=raw_label,
             confidence=conf,
             pixel_xy=(u, v),
             depth_m=depth_m,
@@ -184,10 +203,17 @@ def choose_target(
             retreat_pose=retreat_pose,
             drop_pose=drop_pose,
         )
-        if conf > best_score:
-            best_score = conf
+        rank = (target_priority.get(target_name, len(target_priority)), -conf)
+        if rank < best_rank:
+            best_rank = rank
             best_plan = plan
     return best_plan
+
+
+def format_plan_label(plan: TargetPlan) -> str:
+    if plan.raw_label != plan.label:
+        return f"{plan.raw_label}->{plan.label}"
+    return plan.label
 
 
 def load_calibration(path: Path) -> np.ndarray:
@@ -282,7 +308,7 @@ def execute_plan(
 
 
 def print_plan(plan: TargetPlan) -> None:
-    print(f"Selected target: {plan.label} conf={plan.confidence:.3f}")
+    print(f"Selected target: {format_plan_label(plan)} conf={plan.confidence:.3f}")
     print(f"Pixel center: {plan.pixel_xy}, depth={plan.depth_m:.4f} m")
     print(f"Camera point (m): {plan.point_camera_m.tolist()}")
     print(f"Base point (m): {plan.point_base_m.tolist()}")
@@ -301,7 +327,7 @@ def annotate_frame(image: np.ndarray, plan: TargetPlan | None, go_enabled: bool)
     x, y = plan.pixel_xy
     cv2.circle(frame, (x, y), 6, (0, 255, 0), -1)
     lines = [
-        f"target={plan.label} conf={plan.confidence:.2f} depth={plan.depth_m:.3f}m",
+        f"target={format_plan_label(plan)} conf={plan.confidence:.2f} depth={plan.depth_m:.3f}m",
         f"base=({plan.point_base_m[0]:.3f}, {plan.point_base_m[1]:.3f}, {plan.point_base_m[2]:.3f})",
         "press g to execute" if go_enabled else "dry-run only; add --go to move robot",
     ]
@@ -365,6 +391,7 @@ def main() -> int:
 
     device = resolve_device(args.device, args.allow_cpu)
     base_to_camera = load_calibration(calibration_path)
+    maybe_enable_binaryattention(__file__, model_path, config_path, verbose=True)
     model = YOLO(str(model_path))
     if args.self_test:
         return run_self_test(args, config, model, base_to_camera, device, repo_root)

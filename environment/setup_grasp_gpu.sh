@@ -22,3 +22,9 @@ conda run -n "${ENV_NAME}" python -m pip install -e "${ROOT_DIR}/pyAgxArm" --no-
 
 echo "Running setup smoke check"
 conda run -n "${ENV_NAME}" python "${ROOT_DIR}/scripts/dev/check_setup.py" --config "${ROOT_DIR}/config/sort_trash_pipeline.example.yaml"
+
+echo "Running BinaryAttention smoke check"
+conda run -n "${ENV_NAME}" python "${ROOT_DIR}/scripts/dev/check_setup.py" \
+  --config "${ROOT_DIR}/config/sort_trash_pipeline.binaryattn.dev.yaml" \
+  --try-binaryattn \
+  --try-model
