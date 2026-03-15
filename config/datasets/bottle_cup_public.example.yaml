@@ -1,0 +1,14 @@
+path: /absolute/path/to/public_trash_yolo
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: bottle
+  1: cup
+  2: drink_can
+  3: paper
+  4: cardboard
+  5: plastic_bag
+  6: food_waste
+  7: other_trash

@@ -13,11 +13,12 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 import yaml
-from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _local_ultralytics import maybe_enable_binaryattention
 from _local_sdk import prefer_local_pyagxarm
 from omnihand_2025_controller import build_omnihand_controller, OmniHandController
+from ultralytics import YOLO
 
 prefer_local_pyagxarm(__file__)
 
@@ -336,6 +337,7 @@ def main() -> int:
 
     device = resolve_device(parser.device, parser.allow_cpu)
     base_to_camera = load_base_to_camera(calibration_path)
+    maybe_enable_binaryattention(__file__, model_path, config_path, verbose=True)
     model = YOLO(str(model_path))
 
     camera_cfg = config.get("camera", {})

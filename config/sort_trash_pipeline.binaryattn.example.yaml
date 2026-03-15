@@ -1,4 +1,4 @@
-model: yolo26s.pt
+model: yolo26_binaryattn_s.pt
 calibration_file: config/calibration.identity.yaml
 
 camera:

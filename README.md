@@ -37,7 +37,7 @@ sort_trash/
 │   ├── sort_trash_pipeline.example.yaml# 总控示例配置
 │   ├── calibration.identity.yaml       # 无真机时使用的占位标定文件
 │   ├── task_poses.yaml                 # 记录 home/work/standby 等流程位姿
-│   ├── drop_poses.yaml                 # 记录 bottle/cup 回收盒中心点
+│   ├── drop_poses.yaml                 # 记录统一垃圾标签的回收盒中心点
 │   └── robot_workspace.yaml            # 机械臂工作空间约束和已知安全区域
 ├── data/
 │   └── calib_run_02/                   # 当前可用的一套手眼标定结果和验证结果
@@ -72,7 +72,7 @@ sort_trash/
 │       ├── hover_detected_target.py    # 检测目标后悬停到目标上方，可单次或连续跟随
 │       ├── run_fake_grasp_cycle.py     # 当前最重要的完整 fake grasp 流程脚本
 │       ├── record_task_poses.py        # 记录 home/work/standby 的完整六维位姿
-│       ├── record_drop_poses.py        # 记录 bottle/cup 回收盒中心 XY
+│       ├── record_drop_poses.py        # 记录统一垃圾标签的回收盒中心 XY
 │       ├── probe_cartesian_reachability.py
 │       │                                   # 探测哪些笛卡尔点可达
 │       ├── sweep_cartesian_pose.py     # 从一个已知可达点逐步扫向目标点
@@ -332,7 +332,8 @@ python scripts/control/hover_detected_target.py \
 
 说明：
 
-- 默认优先抓取 `bottle`，其次 `cup`
+- 运行时统一把原始检测类别映射为 `target_name`
+- 当前默认优先抓取 `bottle`、`cup`、`drink_can`
 - `cell phone` 会按 `bottle` 处理，方便兼容当前场景中的误检
 - 目标短暂丢失时会保留一段时间继续使用最近一次结果
 - 当前默认姿态已经改成 `rx=90, ry=-90, rz=0`
@@ -427,6 +428,7 @@ python scripts/control/record_task_poses.py --record standby
 ```bash
 python scripts/control/record_drop_poses.py --record bottle
 python scripts/control/record_drop_poses.py --record cup
+python scripts/control/record_drop_poses.py --record drink_can
 ```
 
 这会写到：
@@ -436,7 +438,7 @@ python scripts/control/record_drop_poses.py --record cup
 说明：
 
 - `record_task_poses.py` 记录完整 `x y z rx ry rz`
-- `record_drop_poses.py` 只记录回收盒中心的 `x y`
+- `record_drop_poses.py` 只记录回收盒中心的 `x y`，标签名可直接使用统一垃圾类别
 - 如果已有同名记录，终端会询问是否覆盖
 
 ### 第 9 步：假抓取全流程
@@ -502,6 +504,7 @@ python scripts/control/run_sort_trash_pipeline.py \
 - 已增加笛卡尔可达性探测脚本 `probe_cartesian_reachability.py`
 - 已增加流程位姿记录脚本 `record_task_poses.py`
 - 已增加回收点记录脚本 `record_drop_poses.py`
+- 已新增统一 8 类垃圾标签映射层，并让主要运行入口统一基于 `target_name` 工作
 - 已增加 fake 抓取全流程脚本 `run_fake_grasp_cycle.py`
 - `detect_realsense_yolo_xyz.py` 已支持同时显示 `camera_xyz` 和 `base_xyz`
 - `move_flange_pose.py` 已支持更细的发送顺序调试和姿态误差检查

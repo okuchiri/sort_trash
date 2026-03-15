@@ -12,11 +12,17 @@ from typing import Any
 import cv2
 import numpy as np
 import yaml
-from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _local_ultralytics import maybe_enable_binaryattention
 from _local_sdk import prefer_local_pyagxarm
 from _safety import check_pose_min_z
+from trash_labels import (
+    DEFAULT_ACTIVE_TARGET_LABELS,
+    normalize_requested_target_labels,
+    resolve_target_name,
+)
+from ultralytics import YOLO
 
 prefer_local_pyagxarm(__file__)
 
@@ -38,10 +44,6 @@ from _common import (  # type: ignore[no-redef]
 import pyrealsense2 as rs
 
 
-CLASS_ALIASES = {
-    "cell phone": "bottle",
-}
-DEFAULT_TARGET_LABELS = ["bottle", "cup"]
 DEFAULT_TASK_POSES_PATH = Path(__file__).resolve().parents[2] / "config" / "task_poses.yaml"
 DEFAULT_DROP_POSES_PATH = Path(__file__).resolve().parents[2] / "config" / "drop_poses.yaml"
 
@@ -62,7 +64,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration-file", required=True, help="calibration_result.yaml with T_base_camera")
     parser.add_argument("--task-poses-file", default=str(DEFAULT_TASK_POSES_PATH), help="YAML file with home/work/standby poses")
     parser.add_argument("--drop-poses-file", default=str(DEFAULT_DROP_POSES_PATH), help="YAML file with per-class drop XY")
-    parser.add_argument("--target-labels", nargs="*", default=DEFAULT_TARGET_LABELS, help="Semantic target labels to keep")
+    parser.add_argument(
+        "--target-labels",
+        nargs="*",
+        default=DEFAULT_ACTIVE_TARGET_LABELS,
+        help="Semantic target labels to keep after raw model outputs are mapped into unified trash labels.",
+    )
     parser.add_argument("--channel", default="can0", help="SocketCAN channel")
     parser.add_argument("--robot", default="nero", help="Robot model for pyAgxArm")
     parser.add_argument("--speed-percent", type=int, default=10, help="Robot speed percent")
@@ -251,9 +258,11 @@ def choose_target(
     rows: list[dict[str, object]] = []
     for row in raw_rows:
         original_name = str(row["class_name"])
-        target_name = CLASS_ALIASES.get(original_name, original_name)
+        target_name = resolve_target_name(original_name)
         row["target_name"] = target_name
-        if target_name not in priority:
+        if target_name is None:
+            continue
+        if priority and target_name not in priority:
             continue
         cx, cy = [int(v) for v in row["center_xy"]]
         depth_m = sample_depth_m(depth_frame, cx, cy, depth_window)
@@ -273,6 +282,15 @@ def choose_target(
         )
     )
     return rows[0] if rows else None
+
+
+def format_target_label(row: dict[str, object] | None) -> str:
+    if row is None:
+        return "unknown"
+    label_text = str(row["class_name"])
+    if row.get("target_name") and row["target_name"] != row["class_name"]:
+        label_text = f"{row['class_name']}->{row['target_name']}"
+    return label_text
 
 
 def build_cycle_poses(best: dict[str, object], args: argparse.Namespace) -> dict[str, list[float]]:
@@ -382,14 +400,24 @@ def main() -> int:
     if not model_path.exists():
         raise SystemExit(f"Model file does not exist: {model_path}")
 
+    try:
+        target_labels = normalize_requested_target_labels(
+            args.target_labels,
+            default=DEFAULT_ACTIVE_TARGET_LABELS,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    args.target_labels = target_labels
+
     calibration_path, base_to_camera = load_base_to_camera(args.calibration_file)
     _ = load_task_pose(args.task_poses_file, "home")
     _ = load_task_pose(args.task_poses_file, "work")
     _ = load_task_pose(args.task_poses_file, "standby")
-    for label in args.target_labels:
+    for label in target_labels:
         _ = load_drop_xy(args.drop_poses_file, label)
 
     device = resolve_device(args.device, args.allow_cpu)
+    maybe_enable_binaryattention(__file__, model_path, verbose=True)
     model = YOLO(str(model_path))
     pipeline, align, profile = build_pipeline(
         camera_serial=args.camera_serial,
@@ -439,7 +467,7 @@ def main() -> int:
                 depth_frame,
                 intrinsics,
                 base_to_camera,
-                target_labels=list(args.target_labels),
+                target_labels=target_labels,
                 depth_window=args.depth_window,
             )
             cycle_poses = build_cycle_poses(best, args) if best is not None else None
@@ -467,9 +495,7 @@ def main() -> int:
                 print("No valid target; fake cycle skipped.")
                 continue
 
-            label_text = str(best["class_name"])
-            if best.get("target_name") and best["target_name"] != best["class_name"]:
-                label_text = f"{best['class_name']}->{best['target_name']}"
+            label_text = format_target_label(best)
             print(f"Selected target: {label_text} conf={float(best['confidence']):.3f}")
             print(f"camera_xyz={best['camera_xyz_m']} base_xyz={best['base_xyz_m']}")
             print(f"Using calibration: {calibration_path}")

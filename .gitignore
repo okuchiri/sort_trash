@@ -27,6 +27,7 @@ Thumbs.db
 
 # Large local assets (do not commit)
 scripts/vision/mobileclip_blt.ts
+*.pt
 
 # Local configs / outputs
 config/*.local.yaml

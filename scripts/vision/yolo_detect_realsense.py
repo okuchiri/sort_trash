@@ -11,12 +11,14 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 import torch
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _local_ultralytics import maybe_enable_binaryattention
 from ultralytics import YOLO
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run YOLO11 on a live RealSense color stream using GPU.")
-    parser.add_argument("--model", default="yolo11s.pt", help="Ultralytics model path or name")
+    parser = argparse.ArgumentParser(description="Run YOLO26 on a live RealSense color stream using GPU.")
+    parser.add_argument("--model", default="yolo26s.pt", help="Ultralytics model path or name")
     parser.add_argument("--device", default="0", help="Inference device. Use 0 for the first CUDA GPU.")
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
     parser.add_argument("--camera-serial", default="", help="Optional D435 serial number")
@@ -49,6 +51,7 @@ def build_pipeline(args: argparse.Namespace) -> rs.pipeline:
 def main() -> int:
     args = parse_args()
     require_cuda(args.device)
+    maybe_enable_binaryattention(__file__, args.model, verbose=True)
     model = YOLO(args.model)
     pipeline = build_pipeline(args)
     output_path = Path(args.save_json).expanduser().resolve() if args.save_json else None
