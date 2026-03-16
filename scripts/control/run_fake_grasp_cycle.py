@@ -16,6 +16,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _local_ultralytics import maybe_enable_binaryattention
 from _local_sdk import prefer_local_pyagxarm
+from omnihand_actions import OmniHandActions, create_actions
 from _safety import check_pose_min_z
 from trash_labels import (
     DEFAULT_ACTIVE_TARGET_LABELS,
@@ -46,6 +47,7 @@ import pyrealsense2 as rs
 
 DEFAULT_TASK_POSES_PATH = Path(__file__).resolve().parents[2] / "config" / "task_poses.yaml"
 DEFAULT_DROP_POSES_PATH = Path(__file__).resolve().parents[2] / "config" / "drop_poses.yaml"
+DEFAULT_HAND_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "sort_trash_pipeline.example.yaml"
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--calibration-file", required=True, help="calibration_result.yaml with T_base_camera")
     parser.add_argument("--task-poses-file", default=str(DEFAULT_TASK_POSES_PATH), help="YAML file with home/work/standby poses")
     parser.add_argument("--drop-poses-file", default=str(DEFAULT_DROP_POSES_PATH), help="YAML file with per-class drop XY")
+    parser.add_argument("--hand-config", default=str(DEFAULT_HAND_CONFIG_PATH), help="YAML file with OmniHand hand config")
     parser.add_argument(
         "--target-labels",
         nargs="*",
@@ -245,6 +248,20 @@ def move_pose(robot: object | None, pose: list[float], execute: bool, label: str
         time.sleep(max(0.0, settle_seconds))
 
 
+def act_hand(hand: OmniHandActions | None, *, action: str, execute: bool, settle_seconds: float) -> None:
+    print(f"{action}_hand")
+    if hand is None:
+        return
+    if action == "open":
+        hand.open_hand()
+    elif action == "close":
+        hand.close_hand()
+    else:
+        raise ValueError(f"Unsupported hand action: {action}")
+    if execute:
+        time.sleep(max(0.0, settle_seconds))
+
+
 def choose_target(
     raw_rows: list[dict[str, object]],
     depth_frame: rs.depth_frame,
@@ -366,7 +383,12 @@ def annotate_frame(image: np.ndarray, best: dict[str, object] | None, cycle_pose
     return put_lines(frame, lines)
 
 
-def execute_fake_cycle(robot: object | None, args: argparse.Namespace, cycle_poses: dict[str, list[float]]) -> None:
+def execute_fake_cycle(
+    robot: object | None,
+    hand: OmniHandActions | None,
+    args: argparse.Namespace,
+    cycle_poses: dict[str, list[float]],
+) -> None:
     home_pose = load_task_pose(args.task_poses_file, "home")
     work_pose = load_task_pose(args.task_poses_file, "work")
     standby_pose = load_task_pose(args.task_poses_file, "standby")
@@ -374,6 +396,7 @@ def execute_fake_cycle(robot: object | None, args: argparse.Namespace, cycle_pos
     execute = bool(args.go and robot is not None)
     move_pose(robot, home_pose, execute, "home", args.settle_seconds, args.send_order, args.mode_resend)
     move_pose(robot, work_pose, execute, "work", args.settle_seconds, args.send_order, args.mode_resend)
+    act_hand(hand, action="open", execute=execute, settle_seconds=args.settle_seconds)
     move_pose(robot, cycle_poses["target_hover"], execute, "target_hover", args.settle_seconds, args.send_order, args.mode_resend)
     move_pose(
         robot,
@@ -384,12 +407,14 @@ def execute_fake_cycle(robot: object | None, args: argparse.Namespace, cycle_pos
         args.send_order,
         args.mode_resend,
     )
-    print("[FAKE GRASP]")
+    act_hand(hand, action="close", execute=execute, settle_seconds=args.settle_seconds)
+    print("[GRASP]")
     move_pose(robot, cycle_poses["target_retreat"], execute, "target_retreat", args.settle_seconds, args.send_order, args.mode_resend)
     move_pose(robot, standby_pose, execute, "standby", args.settle_seconds, args.send_order, args.mode_resend)
     move_pose(robot, cycle_poses["drop_hover"], execute, "drop_hover", args.settle_seconds, args.send_order, args.mode_resend)
     move_pose(robot, cycle_poses["drop_down"], execute, "drop_down", args.settle_seconds, args.send_order, args.mode_resend)
-    print("[FAKE RELEASE]")
+    act_hand(hand, action="open", execute=execute, settle_seconds=args.settle_seconds)
+    print("[RELEASE]")
     move_pose(robot, cycle_poses["drop_retreat"], execute, "drop_retreat", args.settle_seconds, args.send_order, args.mode_resend)
     move_pose(robot, home_pose, execute, "return_home", args.settle_seconds, args.send_order, args.mode_resend)
 
@@ -432,6 +457,7 @@ def main() -> int:
     output_handle = output_path.open("a", encoding="utf-8") if output_path else None
 
     robot = None
+    hand = create_actions(args.hand_config, execute=args.go)
     home_pose = load_task_pose(args.task_poses_file, "home")
     if args.go:
         robot = build_robot(args.channel, args.robot)
@@ -499,7 +525,7 @@ def main() -> int:
             print(f"Selected target: {label_text} conf={float(best['confidence']):.3f}")
             print(f"camera_xyz={best['camera_xyz_m']} base_xyz={best['base_xyz_m']}")
             print(f"Using calibration: {calibration_path}")
-            execute_fake_cycle(robot, args, cycle_poses)
+            execute_fake_cycle(robot, hand, args, cycle_poses)
             if args.once:
                 break
     finally:

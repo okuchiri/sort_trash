@@ -1,18 +1,18 @@
 drop_poses:
   bottle:
     xy:
-    - -0.308629
-    - -0.37122099999999997
+    - -0.20190899999999998
+    - -0.264212
     frame: flange
-    updated_at: '2026-03-13T19:18:03+08:00'
+    updated_at: '2026-03-16T15:51:27+08:00'
     channel: can0
     robot: nero
   cup:
     xy:
-    - -0.058509
-    - -0.34524
+    - -0.066231
+    - -0.250091
     frame: flange
-    updated_at: '2026-03-13T19:18:31+08:00'
+    updated_at: '2026-03-16T15:51:58+08:00'
     channel: can0
     robot: nero
   drink_can:
