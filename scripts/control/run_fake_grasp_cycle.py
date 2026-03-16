@@ -52,7 +52,7 @@ DEFAULT_HAND_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "sor
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a fake full pick/place cycle without a hand: home -> work -> target -> standby -> drop -> home."
+        description="Run a full pick/place cycle with recorded drop poses: home -> work -> target -> standby -> drop -> home."
     )
     parser.add_argument("--model", default=str(default_model_path()), help="Ultralytics model path or name")
     parser.add_argument("--device", default="0", help="Inference device. Use 0 for the first CUDA GPU.")
@@ -65,7 +65,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--depth-window", type=int, default=2, help="Pixel radius for depth fallback sampling")
     parser.add_argument("--calibration-file", required=True, help="calibration_result.yaml with T_base_camera")
     parser.add_argument("--task-poses-file", default=str(DEFAULT_TASK_POSES_PATH), help="YAML file with home/work/standby poses")
-    parser.add_argument("--drop-poses-file", default=str(DEFAULT_DROP_POSES_PATH), help="YAML file with per-class drop XY")
+    parser.add_argument(
+        "--drop-poses-file",
+        default=str(DEFAULT_DROP_POSES_PATH),
+        help="YAML file with per-class drop poses; recorded pose[6] is preferred, xy remains supported as fallback.",
+    )
     parser.add_argument("--hand-config", default=str(DEFAULT_HAND_CONFIG_PATH), help="YAML file with OmniHand hand config")
     parser.add_argument(
         "--target-labels",
@@ -85,15 +89,39 @@ def parse_args() -> argparse.Namespace:
         default=0.18,
         help="Offset added to target base z for the fake pre-grasp pose; on the current setup, the default 0.18 targets about 10 cm above the object.",
     )
-    parser.add_argument("--drop-hover-z-m", type=float, default=0.25, help="Fixed hover z above the drop box")
-    parser.add_argument("--drop-z-m", type=float, default=0.15, help="Fixed down/release z over the drop box")
+    parser.add_argument(
+        "--drop-hover-offset-m",
+        type=float,
+        default=0.10,
+        help="Extra z clearance above the recorded drop pose before descending to release.",
+    )
+    parser.add_argument(
+        "--drop-hover-z-m",
+        type=float,
+        default=0.25,
+        help="Fallback hover z used only when the drop pose file contains XY but not a full recorded pose.",
+    )
+    parser.add_argument(
+        "--drop-z-m",
+        type=float,
+        default=0.15,
+        help="Fallback release z used only when the drop pose file contains XY but not a full recorded pose.",
+    )
     parser.add_argument(
         "--base-offset-m",
         nargs=3,
         type=float,
         default=[0.0, -0.05, 0.0],
         metavar=("DX", "DY", "DZ"),
-        help="Empirical base-frame XYZ correction applied to target hover/pregrasp poses. Current default adds -5 cm on Y.",
+        help="Fallback compatibility offset for older workflows; prefer --grasp-offset-m for grasp approach tuning.",
+    )
+    parser.add_argument(
+        "--grasp-offset-m",
+        nargs=3,
+        type=float,
+        default=[0.10, -0.05, 0.0],
+        metavar=("DX", "DY", "DZ"),
+        help="Base-frame XYZ correction applied to target hover/pregrasp poses. Default adds +10 cm on X and -5 cm on Y.",
     )
     parser.add_argument(
         "--pose-rpy-deg",
@@ -101,7 +129,15 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=[90.0, -90.0, 0.0],
         metavar=("ROLL", "PITCH", "YAW"),
-        help="Fixed flange orientation used for the fake pick/place cycle.",
+        help="Fallback flange orientation used when the drop pose file contains XY but not a full recorded pose.",
+    )
+    parser.add_argument(
+        "--grasp-rpy-deg",
+        nargs=3,
+        type=float,
+        default=[90.0, -20.0, 0.0],
+        metavar=("ROLL", "PITCH", "YAW"),
+        help="Flange orientation used for target_hover/pregrasp poses. Default is RX=90°, RY=-20°, RZ=0°.",
     )
     parser.add_argument("--settle-seconds", type=float, default=1.0, help="Wait time after each move.")
     parser.add_argument("--once", action="store_true", help="Exit after one cycle or one dry-run preview.")
@@ -147,18 +183,29 @@ def load_task_pose(path_str: str, name: str) -> list[float]:
     return [float(v) for v in pose]
 
 
-def load_drop_xy(path_str: str, label: str) -> list[float]:
+def load_drop_target(path_str: str, label: str) -> dict[str, list[float] | None]:
     path, data = load_yaml(path_str)
     drop_poses = data.get("drop_poses", {})
     if not isinstance(drop_poses, dict):
         raise SystemExit(f"'drop_poses' must be a mapping: {path}")
     entry = drop_poses.get(label)
-    if not isinstance(entry, dict) or "xy" not in entry:
-        raise SystemExit(f"Drop XY for '{label}' is missing in {path}")
-    xy = entry["xy"]
-    if not isinstance(xy, list) or len(xy) != 2:
-        raise SystemExit(f"Drop XY for '{label}' must be a 2-element list in {path}")
-    return [float(v) for v in xy]
+    if not isinstance(entry, dict):
+        raise SystemExit(f"Drop pose for '{label}' is missing in {path}")
+
+    pose = entry.get("pose")
+    xy = entry.get("xy")
+    parsed_pose = None
+    parsed_xy = None
+    if isinstance(pose, list) and len(pose) == 6:
+        parsed_pose = [float(v) for v in pose]
+    if isinstance(xy, list) and len(xy) == 2:
+        parsed_xy = [float(v) for v in xy]
+    elif parsed_pose is not None:
+        parsed_xy = [float(parsed_pose[0]), float(parsed_pose[1])]
+
+    if parsed_pose is None and parsed_xy is None:
+        raise SystemExit(f"Drop pose for '{label}' must contain either pose[6] or xy[2] in {path}")
+    return {"pose": parsed_pose, "xy": parsed_xy}
 
 
 def build_robot(channel: str, robot_name: str):
@@ -312,35 +359,50 @@ def format_target_label(row: dict[str, object] | None) -> str:
 
 def build_cycle_poses(best: dict[str, object], args: argparse.Namespace) -> dict[str, list[float]]:
     base = [float(v) for v in best["base_xyz_m"]]
-    base_offset = [float(v) for v in args.base_offset_m]
-    rpy = [float(np.deg2rad(v)) for v in args.pose_rpy_deg]
+    grasp_offset = [float(v) for v in args.grasp_offset_m]
+    grasp_rpy = [float(np.deg2rad(v)) for v in args.grasp_rpy_deg]
+    drop_fallback_rpy = [float(np.deg2rad(v)) for v in args.pose_rpy_deg]
     label = str(best.get("target_name", best["class_name"]))
-    drop_xy = load_drop_xy(args.drop_poses_file, label)
+    drop_target = load_drop_target(args.drop_poses_file, label)
+    drop_pose = drop_target["pose"]
+    drop_xy = drop_target["xy"]
+    assert drop_xy is not None
 
     target_hover = [
-        base[0] + base_offset[0],
-        base[1] + base_offset[1],
-        base[2] + base_offset[2] + args.hover_height_m,
-        *rpy,
+        base[0] + grasp_offset[0],
+        base[1] + grasp_offset[1],
+        base[2] + grasp_offset[2] + args.hover_height_m,
+        *grasp_rpy,
     ]
     pregrasp_10cm = [
-        base[0] + base_offset[0],
-        base[1] + base_offset[1],
-        base[2] + base_offset[2] + args.grasp_z_offset_m,
-        *rpy,
+        base[0] + grasp_offset[0],
+        base[1] + grasp_offset[1],
+        base[2] + grasp_offset[2] + args.grasp_z_offset_m,
+        *grasp_rpy,
     ]
-    drop_hover = [
-        drop_xy[0],
-        drop_xy[1],
-        args.drop_hover_z_m,
-        *rpy,
-    ]
-    drop_down = [
-        drop_xy[0],
-        drop_xy[1],
-        args.drop_z_m,
-        *rpy,
-    ]
+    if drop_pose is not None:
+        drop_down = list(drop_pose)
+        drop_hover = [
+            drop_pose[0],
+            drop_pose[1],
+            drop_pose[2] + args.drop_hover_offset_m,
+            drop_pose[3],
+            drop_pose[4],
+            drop_pose[5],
+        ]
+    else:
+        drop_hover = [
+            drop_xy[0],
+            drop_xy[1],
+            args.drop_hover_z_m,
+            *drop_fallback_rpy,
+        ]
+        drop_down = [
+            drop_xy[0],
+            drop_xy[1],
+            args.drop_z_m,
+            *drop_fallback_rpy,
+        ]
     return {
         "target_hover": target_hover,
         "pregrasp_10cm": pregrasp_10cm,
@@ -355,7 +417,7 @@ def annotate_frame(image: np.ndarray, best: dict[str, object] | None, cycle_pose
     frame = image.copy()
     lines = [
         f"mode={'go' if args.go else 'dry-run'}",
-        f"drop_z={args.drop_z_m:.3f}m hover_h={args.hover_height_m:.3f}m",
+        f"hover_h={args.hover_height_m:.3f}m drop_hover_offset={args.drop_hover_offset_m:.3f}m",
         "Press g to run one fake cycle, q to quit",
     ]
     if best is not None:
@@ -439,7 +501,7 @@ def main() -> int:
     _ = load_task_pose(args.task_poses_file, "work")
     _ = load_task_pose(args.task_poses_file, "standby")
     for label in target_labels:
-        _ = load_drop_xy(args.drop_poses_file, label)
+        _ = load_drop_target(args.drop_poses_file, label)
 
     device = resolve_device(args.device, args.allow_cpu)
     maybe_enable_binaryattention(__file__, model_path, verbose=True)
