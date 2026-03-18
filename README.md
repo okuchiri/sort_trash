@@ -40,7 +40,7 @@ sort_trash/
 │   ├── drop_poses.yaml                 # 记录统一垃圾标签的回收盒投放位姿
 │   └── robot_workspace.yaml            # 机械臂工作空间约束和已知安全区域
 ├── data/
-│   └── calib_run_02/                   # 当前可用的一套手眼标定结果和验证结果
+│   └── calib_run_03/                   # 当前可用的一套手眼标定结果和验证结果
 ├── assets/
 │   └── calibration_boards/             # 标定板 PDF/PNG，例如标准 ChArUco 板
 ├── docs/
@@ -227,7 +227,7 @@ python scripts/vision/detect_realsense_yolo_xyz.py --allow-cpu
 ```bash
 python scripts/vision/detect_realsense_yolo_xyz.py \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml
+  --calibration-file ./data/calib_run_03/calibration_result.yaml
 ```
 
 这时画面和终端都会同时输出：
@@ -257,13 +257,14 @@ python scripts/calibration/capture_eye_to_hand.py \
   --marker-size-mm 11 \
   --aruco-dict DICT_4X4_50 \
   --samples 15 \
-  --output-dir ./data/calib_run_02
+  --output-dir ./data/calib_run_03
 
 python scripts/calibration/solve_eye_to_hand.py \
-  --dataset-dir ./data/calib_run_02
+  --dataset-dir ./data/calib_run_03 \
+  --method park
 
 python scripts/calibration/verify_eye_to_hand.py \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --channel can0 \
   --camera-serial 241222074755 \
   --samples 5
@@ -271,7 +272,13 @@ python scripts/calibration/verify_eye_to_hand.py \
 
 这一步需要机械臂和相机都在线。
 
-当前这一套标准板和脚本已经验证通过，`calib_run_02` 可作为当前可用标定基线。
+说明：
+
+- `solve_eye_to_hand.py` 当前默认推荐使用 `park`
+- 近期实测中，`park` 在当前 NERO + D435 这套数据上通常比 `andreff` 更稳
+- 如果不手动传 `--method`，脚本现在也会默认使用 `park`
+
+当前这一套标准板和脚本已经验证通过，`calib_run_03` 可作为当前可用标定基线。
 
 ### 第 6 步：单独碰机械臂
 
@@ -327,7 +334,7 @@ DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
 python scripts/control/hover_detected_target.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml
+  --calibration-file ./data/calib_run_03/calibration_result.yaml
 ```
 
 说明：
@@ -360,7 +367,7 @@ DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
 python scripts/control/hover_detected_target.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --follow-rate-hz 10 \
   --hover-height-m 0.20 \
   --go
@@ -467,7 +474,7 @@ DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
 python scripts/control/run_fake_grasp_cycle.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --hover-height-m 0.20 \
   --drop-z-m 0.15 \
   --drop-hover-z-m 0.25 \

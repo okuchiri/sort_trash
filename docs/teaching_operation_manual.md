@@ -295,7 +295,7 @@ cd /home/robot/project/sort_trash
 conda activate grasp-gpu
 python scripts/vision/detect_realsense_yolo_xyz.py \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml
+  --calibration-file ./data/calib_run_03/calibration_result.yaml
 ```
 
 讲解重点：
@@ -335,21 +335,21 @@ python scripts/calibration/capture_eye_to_hand.py \
   --marker-size-mm 11 \
   --aruco-dict DICT_4X4_50 \
   --samples 15 \
-  --output-dir ./data/calib_run_02
+  --output-dir ./data/calib_run_03
 ```
 
 求解命令：
 
 ```bash
 python scripts/calibration/solve_eye_to_hand.py \
-  --dataset-dir ./data/calib_run_02
+  --dataset-dir ./data/calib_run_03
 ```
 
 验证命令：
 
 ```bash
 python scripts/calibration/verify_eye_to_hand.py \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --channel can0 \
   --camera-serial 241222074755 \
   --samples 5
@@ -432,7 +432,7 @@ DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
 python scripts/control/hover_detected_target.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml
+  --calibration-file ./data/calib_run_03/calibration_result.yaml
 ```
 
 真机示例命令：
@@ -444,7 +444,7 @@ DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
 python scripts/control/hover_detected_target.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --follow-rate-hz 10 \
   --hover-height-m 0.20 \
   --go
@@ -510,7 +510,7 @@ DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
 python scripts/control/run_fake_grasp_cycle.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --hover-height-m 0.20 \
   --drop-z-m 0.15 \
   --drop-hover-z-m 0.25 \

@@ -77,7 +77,7 @@
 
 - `config/task_poses.yaml`
 - `config/drop_poses.yaml`
-- `data/calib_run_02/calibration_result.yaml`
+- `data/calib_run_03/calibration_result.yaml`
 
 前端和后端必须读取这些真实文件对应的数据，而不是自己维护一份副本。
 
@@ -110,7 +110,7 @@
 
 检测目标的 `camera_xyz` 转 `base_xyz` 时，必须使用：
 
-- `data/calib_run_02/calibration_result.yaml`
+- `data/calib_run_03/calibration_result.yaml`
 
 ## 5. 当前真实运行参数必须纳入后端运行态
 

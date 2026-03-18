@@ -63,5 +63,5 @@ motion_rules:
   note: "Add anything operational that should constrain future motion planning."
 
 camera_alignment:
-  calibration_file: ./data/calib_run_02/calibration_result.yaml
+  calibration_file: ./data/calib_run_03/calibration_result.yaml
   visible_pick_zone_note: "Describe the part of the table that is both visible to the camera and reachable by the robot."

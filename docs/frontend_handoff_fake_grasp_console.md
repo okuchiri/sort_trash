@@ -305,7 +305,7 @@
     "model_ready": true,
     "busy": false,
     "current_mode": "idle",
-    "calibration_file": "data/calib_run_02/calibration_result.yaml",
+    "calibration_file": "data/calib_run_03/calibration_result.yaml",
     "safety": {
       "min_z_m": 0.1
     }
@@ -843,7 +843,7 @@ UI 风格建议：
 python scripts/control/hover_detected_target.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --follow-rate-hz 10 \
   --hover-height-m 0.20 \
   --go
@@ -855,7 +855,7 @@ python scripts/control/hover_detected_target.py \
 python scripts/control/run_fake_grasp_cycle.py \
   --camera-serial 241222074755 \
   --allow-cpu \
-  --calibration-file ./data/calib_run_02/calibration_result.yaml \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
   --hover-height-m 0.20 \
   --drop-z-m 0.15 \
   --drop-hover-z-m 0.25 \
