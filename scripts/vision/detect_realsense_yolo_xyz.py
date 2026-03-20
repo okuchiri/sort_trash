@@ -22,10 +22,12 @@ from trash_labels import (
 from ultralytics import YOLO
 
 from _common import (
+    DetectionStabilizer,
     build_pipeline,
     default_model_path,
-    detection_rows,
     intrinsics_from_profile,
+    normalize_rotate_inference_modes,
+    predict_detection_rows_multirotation,
     put_lines,
     resolve_device,
     resolve_path,
@@ -47,7 +49,39 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--rotate-inference",
+        choices=["none", "cw90", "ccw90", "180"],
+        default="none",
+        help="Single rotate mode for YOLO inference. Use --rotate-inference-modes for dual/triple-route inference.",
+    )
+    parser.add_argument(
+        "--rotate-inference-modes",
+        nargs="*",
+        choices=["none", "cw90", "ccw90", "180"],
+        default=None,
+        help="Optional multiple rotate modes, e.g. none cw90 ccw90.",
+    )
+    parser.add_argument("--imgsz", type=int, default=960, help="YOLO inference size in pixels")
     parser.add_argument("--depth-window", type=int, default=2, help="Pixel radius for depth fallback sampling")
+    parser.add_argument(
+        "--stable-window-frames",
+        type=int,
+        default=5,
+        help="Number of recent frames used for detection stabilization.",
+    )
+    parser.add_argument(
+        "--stable-min-hits",
+        type=int,
+        default=3,
+        help="How many matching detections are required inside the stabilization window.",
+    )
+    parser.add_argument(
+        "--stable-max-center-dist-px",
+        type=float,
+        default=80.0,
+        help="Maximum pixel drift allowed when matching detections across frames.",
+    )
     parser.add_argument(
         "--target-labels",
         nargs="*",
@@ -60,6 +94,19 @@ def parse_args() -> argparse.Namespace:
         default=0.8,
         help="Keep showing the last valid mapped target for this many seconds when detection flickers.",
     )
+    parser.add_argument(
+        "--enable-auto-exposure",
+        action="store_true",
+        help="Keep RealSense color auto exposure enabled instead of locking manual settings.",
+    )
+    parser.add_argument("--exposure", type=float, default=156.0, help="Manual RealSense color exposure when auto exposure is disabled.")
+    parser.add_argument("--gain", type=float, default=64.0, help="Manual RealSense color gain when auto exposure is disabled.")
+    parser.add_argument(
+        "--enable-auto-white-balance",
+        action="store_true",
+        help="Keep RealSense auto white balance enabled instead of locking a manual value.",
+    )
+    parser.add_argument("--white-balance", type=float, default=4600.0, help="Manual RealSense white balance when auto white balance is disabled.")
     parser.add_argument(
         "--calibration-file",
         default="",
@@ -102,8 +149,11 @@ def draw_target_box(
     cx, cy = [int(v) for v in row["center_xy"]]
     stale = bool(row.get("stale"))
     fallback = bool(row.get("fallback"))
+    unstable = bool(row.get("unstable"))
     if stale:
         color = (120, 200, 200)
+    elif unstable:
+        color = (0, 220, 255)
     elif fallback:
         color = (0, 160, 255)
     else:
@@ -116,6 +166,8 @@ def draw_target_box(
     title = f"{format_target_label(row)} conf={float(row['confidence']):.2f}"
     if stale:
         title += " stale"
+    elif unstable:
+        title += f" stabilizing({int(row.get('stable_hits', 0))})"
     elif fallback:
         title += " fallback"
     if row.get("camera_xyz_m") is None:
@@ -138,11 +190,13 @@ def build_overlay_lines(
     calibration_path: Path | None,
     *,
     target_labels: list[str],
+    rotate_mode: str,
 ) -> list[str]:
     if not rows:
         lines = [
             "Step 3: YOLO + depth -> camera XYZ",
             f"targets={','.join(target_labels)}",
+            f"rotate={rotate_mode}",
             "No mapped target detected",
         ]
         if calibration_path is not None:
@@ -155,11 +209,14 @@ def build_overlay_lines(
     status = "primary"
     if bool(best.get("stale")):
         status = "last-known"
+    elif bool(best.get("unstable")):
+        status = f"stabilizing {int(best.get('stable_hits', 0))}/{best.get('stable_required', '?')}"
     elif bool(best.get("fallback")):
         status = "fallback"
     lines = [
         "Step 3: YOLO + depth -> camera XYZ",
         f"targets={','.join(target_labels)}",
+        f"rotate={rotate_mode}",
         f"{status}={format_target_label(best)} conf={float(best['confidence']):.2f} pixel={center_xy}",
     ]
     if best.get("camera_xyz_m") is None:
@@ -196,6 +253,8 @@ def clone_row(row: dict[str, object]) -> dict[str, object]:
 
 def main() -> int:
     args = parse_args()
+    rotate_modes = normalize_rotate_inference_modes(args.rotate_inference, args.rotate_inference_modes)
+    args.rotate_inference_label = "+".join(rotate_modes)
     model_path = resolve_path(args.model)
     if not model_path.exists():
         raise SystemExit(f"Model file does not exist: {model_path}")
@@ -212,6 +271,11 @@ def main() -> int:
         height=args.height,
         fps=args.fps,
         enable_depth=True,
+        color_auto_exposure=args.enable_auto_exposure,
+        color_exposure=args.exposure,
+        color_gain=args.gain,
+        color_auto_white_balance=args.enable_auto_white_balance,
+        color_white_balance=args.white_balance,
     )
     assert align is not None
     intrinsics = intrinsics_from_profile(profile)
@@ -229,8 +293,12 @@ def main() -> int:
     target_priority = {label: idx for idx, label in enumerate(normalized_target_labels)}
     window_name = "detect_realsense_yolo_xyz"
     last_print_s = 0.0
-    last_primary: dict[str, object] | None = None
-    last_primary_ts = 0.0
+    stabilizer = DetectionStabilizer(
+        window_frames=args.stable_window_frames,
+        min_hits=args.stable_min_hits,
+        max_center_distance_px=args.stable_max_center_dist_px,
+        hold_seconds=args.keep_last_seconds,
+    )
 
     try:
         while True:
@@ -242,17 +310,17 @@ def main() -> int:
                 continue
 
             image = np.asanyarray(color_frame.get_data())
-            results = model.predict(
-                source=image,
-                device=device,
-                conf=args.conf,
-                verbose=False,
-                stream=False,
-            )
-            result = results[0]
             all_rows = []
             target_rows = []
-            for row in detection_rows(result):
+            mapped_rows = predict_detection_rows_multirotation(
+                model,
+                image,
+                rotate_modes=rotate_modes,
+                device=device,
+                conf=args.conf,
+                imgsz=args.imgsz,
+            )
+            for row in mapped_rows:
                 row["target_name"] = resolve_target_name(str(row["class_name"]))
                 all_rows.append(row)
                 if row["target_name"] is None:
@@ -280,22 +348,18 @@ def main() -> int:
             )
             all_rows.sort(key=lambda row: float(row["confidence"]), reverse=True)
 
-            rows = target_rows
             now = time.time()
-            if target_rows:
-                last_primary = clone_row(target_rows[0])
-                last_primary["stale"] = False
-                last_primary["fallback"] = False
-                last_primary_ts = now
-            elif last_primary is not None and now - last_primary_ts <= max(0.0, args.keep_last_seconds):
-                stale_row = clone_row(last_primary)
-                stale_row["stale"] = True
-                rows = [stale_row]
+            stable_row = stabilizer.update(target_rows, now=now)
+            rows: list[dict[str, object]] = []
+            if stable_row is not None:
+                stable_row["stable_required"] = args.stable_min_hits
+                rows = [stable_row]
             elif all_rows:
                 fallback = clone_row(all_rows[0])
                 fallback["depth_m"] = math.nan
                 fallback["camera_xyz_m"] = None
                 fallback["fallback"] = True
+                fallback["stable_required"] = args.stable_min_hits
                 rows = [fallback]
 
             annotated = image.copy()
@@ -323,7 +387,12 @@ def main() -> int:
 
             annotated = put_lines(
                 annotated,
-                build_overlay_lines(rows, calibration_path, target_labels=normalized_target_labels),
+                build_overlay_lines(
+                    rows,
+                    calibration_path,
+                    target_labels=normalized_target_labels,
+                    rotate_mode=args.rotate_inference_label,
+                ),
             )
             cv2.imshow(window_name, annotated)
             if cv2.waitKey(1) & 0xFF == ord("q"):

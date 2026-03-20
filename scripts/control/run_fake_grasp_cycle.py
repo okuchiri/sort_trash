@@ -32,10 +32,12 @@ if str(VISION_DIR) not in sys.path:
     sys.path.insert(0, str(VISION_DIR))
 
 from _common import (  # type: ignore[no-redef]
+    DetectionStabilizer,
     build_pipeline,
     default_model_path,
-    detection_rows,
     intrinsics_from_profile,
+    normalize_rotate_inference_modes,
+    predict_detection_rows_multirotation,
     put_lines,
     resolve_device,
     resolve_path,
@@ -62,7 +64,45 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--rotate-inference",
+        choices=["none", "cw90", "ccw90", "180"],
+        default="none",
+        help="Single rotate mode for YOLO inference. Use --rotate-inference-modes for dual/triple-route inference.",
+    )
+    parser.add_argument(
+        "--rotate-inference-modes",
+        nargs="*",
+        choices=["none", "cw90", "ccw90", "180"],
+        default=None,
+        help="Optional multiple rotate modes, e.g. none cw90 ccw90.",
+    )
+    parser.add_argument("--imgsz", type=int, default=960, help="YOLO inference size in pixels")
     parser.add_argument("--depth-window", type=int, default=2, help="Pixel radius for depth fallback sampling")
+    parser.add_argument(
+        "--stable-window-frames",
+        type=int,
+        default=5,
+        help="Number of recent frames used for detection stabilization.",
+    )
+    parser.add_argument(
+        "--stable-min-hits",
+        type=int,
+        default=3,
+        help="How many matching detections are required inside the stabilization window.",
+    )
+    parser.add_argument(
+        "--stable-max-center-dist-px",
+        type=float,
+        default=80.0,
+        help="Maximum pixel drift allowed when matching detections across frames.",
+    )
+    parser.add_argument(
+        "--keep-last-seconds",
+        type=float,
+        default=0.5,
+        help="Keep the last stable target for this many seconds when detections flicker.",
+    )
     parser.add_argument("--calibration-file", required=True, help="calibration_result.yaml with T_base_camera")
     parser.add_argument("--task-poses-file", default=str(DEFAULT_TASK_POSES_PATH), help="YAML file with home/work/standby poses")
     parser.add_argument(
@@ -71,6 +111,19 @@ def parse_args() -> argparse.Namespace:
         help="YAML file with per-class drop poses; recorded pose[6] is preferred, xy remains supported as fallback.",
     )
     parser.add_argument("--hand-config", default=str(DEFAULT_HAND_CONFIG_PATH), help="YAML file with OmniHand hand config")
+    parser.add_argument(
+        "--enable-auto-exposure",
+        action="store_true",
+        help="Keep RealSense color auto exposure enabled instead of locking manual settings.",
+    )
+    parser.add_argument("--exposure", type=float, default=156.0, help="Manual RealSense color exposure when auto exposure is disabled.")
+    parser.add_argument("--gain", type=float, default=64.0, help="Manual RealSense color gain when auto exposure is disabled.")
+    parser.add_argument(
+        "--enable-auto-white-balance",
+        action="store_true",
+        help="Keep RealSense auto white balance enabled instead of locking a manual value.",
+    )
+    parser.add_argument("--white-balance", type=float, default=4600.0, help="Manual RealSense white balance when auto white balance is disabled.")
     parser.add_argument(
         "--target-labels",
         nargs="*",
@@ -417,18 +470,26 @@ def annotate_frame(image: np.ndarray, best: dict[str, object] | None, cycle_pose
     frame = image.copy()
     lines = [
         f"mode={'go' if args.go else 'dry-run'}",
-        f"hover_h={args.hover_height_m:.3f}m drop_hover_offset={args.drop_hover_offset_m:.3f}m",
+        f"rotate={args.rotate_inference_label} imgsz={args.imgsz} hover_h={args.hover_height_m:.3f}m drop_hover_offset={args.drop_hover_offset_m:.3f}m",
         "Press g to run one fake cycle, q to quit",
     ]
     if best is not None:
         x1, y1, x2, y2 = [int(v) for v in best["bbox_xyxy"]]
         cx, cy = [int(v) for v in best["center_xy"]]
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
-        cv2.circle(frame, (cx, cy), 5, (0, 220, 0), -1)
+        stale = bool(best.get("stale"))
+        unstable = bool(best.get("unstable"))
+        color = (120, 200, 200) if stale else ((0, 220, 255) if unstable else (0, 220, 0))
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.circle(frame, (cx, cy), 5, color, -1)
         label_text = str(best["class_name"])
         if best.get("target_name") and best["target_name"] != best["class_name"]:
             label_text = f"{best['class_name']}->{best['target_name']}"
-        lines.append(f"target={label_text} conf={float(best['confidence']):.2f}")
+        status = "stable"
+        if stale:
+            status = "last-known"
+        elif unstable:
+            status = f"stabilizing {int(best.get('stable_hits', 0))}/{args.stable_min_hits}"
+        lines.append(f"target={label_text} conf={float(best['confidence']):.2f} status={status}")
         lines.append(
             f"base=({best['base_xyz_m'][0]:.3f}, {best['base_xyz_m'][1]:.3f}, {best['base_xyz_m'][2]:.3f})"
         )
@@ -483,6 +544,8 @@ def execute_fake_cycle(
 
 def main() -> int:
     args = parse_args()
+    rotate_modes = normalize_rotate_inference_modes(args.rotate_inference, args.rotate_inference_modes)
+    args.rotate_inference_label = "+".join(rotate_modes)
     model_path = resolve_path(args.model)
     if not model_path.exists():
         raise SystemExit(f"Model file does not exist: {model_path}")
@@ -506,17 +569,6 @@ def main() -> int:
     device = resolve_device(args.device, args.allow_cpu)
     maybe_enable_binaryattention(__file__, model_path, verbose=True)
     model = YOLO(str(model_path))
-    pipeline, align, profile = build_pipeline(
-        camera_serial=args.camera_serial,
-        width=args.width,
-        height=args.height,
-        fps=args.fps,
-        enable_depth=True,
-    )
-    assert align is not None
-    intrinsics = intrinsics_from_profile(profile)
-    output_path = Path(args.save_json).expanduser().resolve() if args.save_json else None
-    output_handle = output_path.open("a", encoding="utf-8") if output_path else None
 
     robot = None
     hand = create_actions(args.hand_config, execute=args.go)
@@ -531,6 +583,29 @@ def main() -> int:
             print("Robot is not at home pose; moving to home before detection.")
             move_pose(robot, home_pose, True, "startup_home", args.settle_seconds, args.send_order, args.mode_resend)
 
+    pipeline, align, profile = build_pipeline(
+        camera_serial=args.camera_serial,
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        enable_depth=True,
+        color_auto_exposure=args.enable_auto_exposure,
+        color_exposure=args.exposure,
+        color_gain=args.gain,
+        color_auto_white_balance=args.enable_auto_white_balance,
+        color_white_balance=args.white_balance,
+    )
+    assert align is not None
+    intrinsics = intrinsics_from_profile(profile)
+    stabilizer = DetectionStabilizer(
+        window_frames=args.stable_window_frames,
+        min_hits=args.stable_min_hits,
+        max_center_distance_px=args.stable_max_center_dist_px,
+        hold_seconds=args.keep_last_seconds,
+    )
+    output_path = Path(args.save_json).expanduser().resolve() if args.save_json else None
+    output_handle = output_path.open("a", encoding="utf-8") if output_path else None
+
     window_name = "run_fake_grasp_cycle"
     try:
         while True:
@@ -542,15 +617,15 @@ def main() -> int:
                 continue
 
             image = np.asanyarray(color_frame.get_data())
-            results = model.predict(
-                source=image,
+            raw_rows = predict_detection_rows_multirotation(
+                model,
+                image,
+                rotate_modes=rotate_modes,
                 device=device,
                 conf=args.conf,
-                verbose=False,
-                stream=False,
+                imgsz=args.imgsz,
             )
-            raw_rows = detection_rows(results[0])
-            best = choose_target(
+            current_best = choose_target(
                 raw_rows,
                 depth_frame,
                 intrinsics,
@@ -558,7 +633,14 @@ def main() -> int:
                 target_labels=target_labels,
                 depth_window=args.depth_window,
             )
-            cycle_poses = build_cycle_poses(best, args) if best is not None else None
+            best = stabilizer.update([current_best] if current_best is not None else [], now=time.time())
+            can_execute_target = (
+                best is not None
+                and not bool(best.get("unstable"))
+                and not bool(best.get("stale"))
+                and best.get("base_xyz_m") is not None
+            )
+            cycle_poses = build_cycle_poses(best, args) if can_execute_target else None
 
             annotated = annotate_frame(image, best, cycle_poses, args)
             cv2.imshow(window_name, annotated)
@@ -580,7 +662,12 @@ def main() -> int:
             if key != ord("g"):
                 continue
             if best is None or cycle_poses is None:
-                print("No valid target; fake cycle skipped.")
+                if best is not None and bool(best.get("unstable")):
+                    print(
+                        f"Target is still stabilizing ({int(best.get('stable_hits', 0))}/{args.stable_min_hits}); fake cycle skipped."
+                    )
+                else:
+                    print("No stable valid target; fake cycle skipped.")
                 continue
 
             label_text = format_target_label(best)

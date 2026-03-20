@@ -31,10 +31,12 @@ if str(VISION_DIR) not in sys.path:
     sys.path.insert(0, str(VISION_DIR))
 
 from _common import (  # type: ignore[no-redef]
+    DetectionStabilizer,
     build_pipeline,
     default_model_path,
-    detection_rows,
     intrinsics_from_profile,
+    normalize_rotate_inference_modes,
+    predict_detection_rows_multirotation,
     put_lines,
     resolve_device,
     resolve_path,
@@ -55,6 +57,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--rotate-inference",
+        choices=["none", "cw90", "ccw90", "180"],
+        default="none",
+        help="Single rotate mode for YOLO inference. Use --rotate-inference-modes for dual/triple-route inference.",
+    )
+    parser.add_argument(
+        "--rotate-inference-modes",
+        nargs="*",
+        choices=["none", "cw90", "ccw90", "180"],
+        default=None,
+        help="Optional multiple rotate modes, e.g. none cw90 ccw90.",
+    )
+    parser.add_argument("--imgsz", type=int, default=960, help="YOLO inference size in pixels")
     parser.add_argument("--depth-window", type=int, default=2, help="Pixel radius for depth fallback sampling")
     parser.add_argument("--calibration-file", required=True, help="calibration_result.yaml with T_base_camera")
     parser.add_argument(
@@ -72,9 +88,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--keep-last-seconds",
         type=float,
-        default=1.5,
+        default=0.8,
         help="Keep showing and using the last valid target for this many seconds when detection flickers.",
     )
+    parser.add_argument(
+        "--stable-window-frames",
+        type=int,
+        default=5,
+        help="Number of recent frames used for detection stabilization.",
+    )
+    parser.add_argument(
+        "--stable-min-hits",
+        type=int,
+        default=3,
+        help="How many matching detections are required inside the stabilization window.",
+    )
+    parser.add_argument(
+        "--stable-max-center-dist-px",
+        type=float,
+        default=80.0,
+        help="Maximum pixel drift allowed when matching detections across frames.",
+    )
+    parser.add_argument(
+        "--enable-auto-exposure",
+        action="store_true",
+        help="Keep RealSense color auto exposure enabled instead of locking manual settings.",
+    )
+    parser.add_argument("--exposure", type=float, default=156.0, help="Manual RealSense color exposure when auto exposure is disabled.")
+    parser.add_argument("--gain", type=float, default=64.0, help="Manual RealSense color gain when auto exposure is disabled.")
+    parser.add_argument(
+        "--enable-auto-white-balance",
+        action="store_true",
+        help="Keep RealSense auto white balance enabled instead of locking a manual value.",
+    )
+    parser.add_argument("--white-balance", type=float, default=4600.0, help="Manual RealSense white balance when auto white balance is disabled.")
     parser.add_argument("--hover-height-m", type=float, default=0.30, help="Hover offset above detected base Z")
     parser.add_argument(
         "--base-offset-m",
@@ -207,6 +254,8 @@ def format_target_label(row: dict[str, object] | None) -> str:
         label_text = f"{row['class_name']}->{row['target_name']}"
     if bool(row.get("stale")):
         label_text += " stale"
+    elif bool(row.get("unstable")):
+        label_text += f" stabilizing({int(row.get('stable_hits', 0))})"
     return label_text
 
 
@@ -398,6 +447,8 @@ def draw_target_box(image: np.ndarray, row: dict[str, object], *, primary: bool)
     cx, cy = [int(v) for v in row["center_xy"]]
     if bool(row.get("stale")):
         color = (120, 220, 220)
+    elif bool(row.get("unstable")):
+        color = (0, 220, 255)
     else:
         color = (0, 220, 0) if primary else (0, 160, 255)
     thickness = 3 if primary else 2
@@ -413,6 +464,7 @@ def overlay_lines(
     go: bool,
     debug_rows: list[dict[str, object]],
     *,
+    args: argparse.Namespace,
     follow_enabled: bool,
     follow_filter_enabled: bool,
     follow_rate_hz: float,
@@ -424,11 +476,12 @@ def overlay_lines(
         "Hover target above detected object",
         f"calibration={calibration_path.name}",
         f"mode={'go' if go else 'dry-run'}",
+        f"rotate={args.rotate_inference_label} imgsz={args.imgsz} stable={args.stable_min_hits}/{args.stable_window_frames}",
         f"follow={'ON' if follow_enabled else 'OFF'} cmd<={follow_rate_hz:.1f}Hz",
         f"follow_filter={'ON' if follow_filter_enabled else 'OFF'} alpha={follow_filter_alpha:.2f}",
         f"offset=({base_offset_m[0]:.3f}, {base_offset_m[1]:.3f}, {base_offset_m[2]:.3f}) step={offset_step_m:.3f}m",
     ]
-    if row is None or hover_pose is None:
+    if row is None:
         lines.append("No valid target")
         lines.append("Offset keys: a/d=X-/X+, w/s=Y+/Y-, r/v=Z+/Z-, x=reset")
         lines.append("Press f=follow, h=filter, g=single-shot, q=quit")
@@ -440,13 +493,18 @@ def overlay_lines(
         label_text = f"{row['class_name']}->{row['target_name']}"
     if bool(row.get("stale")):
         label_text += " stale"
+    elif bool(row.get("unstable")):
+        label_text += f" stabilizing({int(row.get('stable_hits', 0))}/{args.stable_min_hits})"
     lines.append(f"{label_text} conf={float(row['confidence']):.2f} pixel={[int(v) for v in row['center_xy']]}")
     lines.append(f"cam=({cam[0]:.3f}, {cam[1]:.3f}, {cam[2]:.3f})")
     lines.append(f"base=({base[0]:.3f}, {base[1]:.3f}, {base[2]:.3f})")
-    lines.append(
-        f"hover=({hover_pose[0]:.3f}, {hover_pose[1]:.3f}, {hover_pose[2]:.3f}, "
-        f"{hover_pose[3]:.3f}, {hover_pose[4]:.3f}, {hover_pose[5]:.3f})"
-    )
+    if hover_pose is not None:
+        lines.append(
+            f"hover=({hover_pose[0]:.3f}, {hover_pose[1]:.3f}, {hover_pose[2]:.3f}, "
+            f"{hover_pose[3]:.3f}, {hover_pose[4]:.3f}, {hover_pose[5]:.3f})"
+        )
+    else:
+        lines.append("hover=waiting for stable target")
     if debug_rows:
         debug_text = ", ".join(f"{r['class_name']}:{float(r['confidence']):.2f}" for r in debug_rows)
         lines.append(f"top={debug_text}")
@@ -457,6 +515,8 @@ def overlay_lines(
 
 def main() -> int:
     args = parse_args()
+    rotate_modes = normalize_rotate_inference_modes(args.rotate_inference, args.rotate_inference_modes)
+    args.rotate_inference_label = "+".join(rotate_modes)
     model_path = resolve_path(args.model)
     if not model_path.exists():
         raise SystemExit(f"Model file does not exist: {model_path}")
@@ -471,6 +531,11 @@ def main() -> int:
         height=args.height,
         fps=args.fps,
         enable_depth=True,
+        color_auto_exposure=args.enable_auto_exposure,
+        color_exposure=args.exposure,
+        color_gain=args.gain,
+        color_auto_white_balance=args.enable_auto_white_balance,
+        color_white_balance=args.white_balance,
     )
     assert align is not None
     intrinsics = intrinsics_from_profile(profile)
@@ -504,9 +569,12 @@ def main() -> int:
 
     window_name = "hover_detected_target"
     last_print_s = 0.0
-    last_valid_row: dict[str, object] | None = None
-    last_valid_hover_pose: list[float] | None = None
-    last_valid_ts = 0.0
+    stabilizer = DetectionStabilizer(
+        window_frames=args.stable_window_frames,
+        min_hits=args.stable_min_hits,
+        max_center_distance_px=args.stable_max_center_dist_px,
+        hold_seconds=args.keep_last_seconds,
+    )
     last_key = -1
     follow_enabled = False
     follow_filter_enabled = False
@@ -521,16 +589,15 @@ def main() -> int:
                 continue
 
             image = np.asanyarray(color_frame.get_data())
-            results = model.predict(
-                source=image,
+            rows: list[dict[str, object]] = []
+            raw_rows = predict_detection_rows_multirotation(
+                model,
+                image,
+                rotate_modes=rotate_modes,
                 device=device,
                 conf=args.conf,
-                verbose=False,
-                stream=False,
+                imgsz=args.imgsz,
             )
-            result = results[0]
-            rows: list[dict[str, object]] = []
-            raw_rows = detection_rows(result)
             debug_rows = sorted(raw_rows, key=lambda row: float(row["confidence"]), reverse=True)[: max(0, args.debug_topk)]
             for row in raw_rows:
                 original_name = str(row["class_name"])
@@ -555,9 +622,10 @@ def main() -> int:
                 )
             )
 
-            best = rows[0] if rows else None
+            current_best = rows[0] if rows else None
+            best = stabilizer.update([current_best] if current_best is not None else [], now=time.time())
             hover_pose = None
-            if best is not None:
+            if best is not None and not bool(best.get("unstable")):
                 base = best["base_xyz_m"]
                 hover_pose = [
                     float(base[0] + base_offset_m[0]),
@@ -565,14 +633,6 @@ def main() -> int:
                     float(base[2] + base_offset_m[2] + args.hover_height_m),
                     *pose_rpy_rad,
                 ]
-                last_valid_row = clone_row(best)
-                last_valid_hover_pose = [float(v) for v in hover_pose]
-                last_valid_ts = time.time()
-            elif last_valid_row is not None and time.time() - last_valid_ts <= max(0.0, args.keep_last_seconds):
-                best = clone_row(last_valid_row)
-                hover_pose = [float(v) for v in last_valid_hover_pose] if last_valid_hover_pose is not None else None
-                if best is not None:
-                    best["stale"] = True
             if follow_controller is not None:
                 follow_controller.update_target(best, hover_pose)
 
@@ -581,15 +641,16 @@ def main() -> int:
                 draw_target_box(annotated, best, primary=True)
             annotated = put_lines(
                 annotated,
-                overlay_lines(
-                    best,
-                    hover_pose,
-                    calibration_path,
-                    args.go,
-                    debug_rows,
-                    follow_enabled=follow_enabled,
-                    follow_filter_enabled=follow_filter_enabled,
-                    follow_rate_hz=args.follow_rate_hz,
+                    overlay_lines(
+                        best,
+                        hover_pose,
+                        calibration_path,
+                        args.go,
+                        debug_rows,
+                        args=args,
+                        follow_enabled=follow_enabled,
+                        follow_filter_enabled=follow_filter_enabled,
+                        follow_rate_hz=args.follow_rate_hz,
                     follow_filter_alpha=args.follow_filter_alpha,
                     base_offset_m=base_offset_m,
                     offset_step_m=args.offset_step_m,
