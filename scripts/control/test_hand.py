@@ -1,14 +1,40 @@
 import sys
-sys.path.insert(0, "/root/sort_trash/scripts")
+from pathlib import Path
 
-from omnihand_actions import create_actions
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
-hand = create_actions("/root/sort_trash/config/sort_trash_pipeline.example.yaml")
-import sys
+from omnihand_actions import create_actions, load_hand_config
+
 import select
 import tty
 import termios
 import time
+
+
+def build_test_hand():
+    cfg = load_hand_config(ROOT / "config" / "sort_trash_pipeline.example.yaml")
+    # Test-only grip tuning:
+    # - make the thumb side curl more aggressively
+    # - keep the distal joints of the four fingers slightly straighter
+    cfg["close_angles_rad"] = [
+        0.18,
+        -1.35,
+        0.75,
+        0.00,
+        0.75,
+        0.75,
+        0.00,
+        0.75,
+        0.00,
+        0.75,
+    ]
+    return create_actions(cfg)
+
+
+hand = build_test_hand()
 
 def main():
     # 保存原始终端设置
