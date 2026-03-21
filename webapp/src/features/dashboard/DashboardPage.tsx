@@ -15,6 +15,7 @@ import { DEFAULT_RUNTIME_CONFIG } from "../runtime-config/runtimeConfigSchema";
 import { useApiAction } from "../../hooks/useApiAction";
 import { useDetectionPolling } from "../../hooks/useDetectionPolling";
 import { useStatusPolling } from "../../hooks/useStatusPolling";
+import type { ApiEnvelope } from "../../types/api";
 import type { DropPosesResponse, RuntimeConfig, TaskPosesResponse } from "../../types/domain";
 import { canRunFakeGrasp, hasRequiredDropPoses, hasRequiredTaskPoses, listMissingRequirements } from "../../state/uiStore";
 
@@ -37,7 +38,9 @@ export function DashboardPage() {
 
   const missing = useMemo(() => listMissingRequirements(taskPoses, dropPoses), [taskPoses, dropPoses]);
   const fakeGraspEnabled = canRunFakeGrasp(status, taskPoses, dropPoses);
-  const followEnabled = Boolean(status && status.can_up && !status.busy && status.current_mode !== "running_fake_cycle");
+  const followSupported = Boolean(status?.capabilities?.follow);
+  const followEnabled = Boolean(followSupported && status && status.can_up && !status.busy && status.current_mode !== "running_fake_cycle");
+  const canStopFollow = Boolean(followSupported && !pending && status?.current_mode === "following");
 
   async function handleApplyConfig() {
     const response = await run(() => updateRuntimeConfig(runtimeConfig));
@@ -85,7 +88,7 @@ export function DashboardPage() {
     if (!response?.ok) window.alert(buildErrorMessage(response?.message, response?.code));
   }
 
-  async function handleSimpleAction(action: () => Promise<unknown>) {
+  async function handleSimpleAction<T>(action: () => Promise<ApiEnvelope<T>>) {
     const response = await run(action);
     if (!response?.ok) window.alert(buildErrorMessage(response?.message, response?.code));
   }
@@ -108,6 +111,8 @@ export function DashboardPage() {
             busy={Boolean(status?.busy || pending)}
             canRunFakeGrasp={fakeGraspEnabled}
             canStartFollow={followEnabled}
+            canStopFollow={canStopFollow}
+            followSupported={followSupported}
             onMoveHome={() => void handleSimpleAction(moveHome)}
             onMoveWork={() => void handleSimpleAction(moveWork)}
             onMoveStandby={() => void handleSimpleAction(moveStandby)}
@@ -128,6 +133,12 @@ export function DashboardPage() {
         {!status?.can_up ? <HardwareFaultCard /> : null}
         {missing.length > 0 ? (
           <SafetyAlert title="配置不完整" message={`以下配置缺失，Fake Grasp 将保持禁用：${missing.join(" / ")}`} />
+        ) : null}
+        {status?.last_issue ? (
+          <SafetyAlert
+            title={status.last_issue.code === "UNREACHABLE_TARGET" ? "目标不可达" : "运行异常"}
+            message={status.last_issue.message}
+          />
         ) : null}
         {combinedError ? <SafetyAlert title="接口异常" message={combinedError} /> : null}
         {status && !hasRequiredTaskPoses(taskPoses) && !hasRequiredDropPoses(dropPoses) ? null : status ? (

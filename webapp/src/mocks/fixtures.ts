@@ -8,8 +8,14 @@ export const MOCK_STATUS: SystemStatus = {
   busy: false,
   current_mode: "idle",
   current_step: null,
-  calibration_file: "/home/robot/project/sort_trash/data/calib_run_02/calibration_result.yaml",
+  calibration_file: "/home/robot/project/sort_trash/data/calib_run_03/calibration_result.yaml",
   safety: { min_z_m: 0.1 },
+  capabilities: {
+    fake_grasp: true,
+    follow: false,
+    video: true,
+    pose_recording: true,
+  },
 };
 
 export const MOCK_DETECTION: DetectionState = {
@@ -30,13 +36,15 @@ export const MOCK_DETECTION: DetectionState = {
 };
 
 export const MOCK_RUNTIME_CONFIG: RuntimeConfig = {
-  hover_height_m: 0.2,
-  grasp_z_offset_m: 0.18,
+  hover_height_m: 0.15,
+  grasp_z_offset_m: 0.1,
   drop_hover_z_m: 0.25,
   drop_z_m: 0.15,
   follow_rate_hz: 10,
-  base_offset_m: [-0.1, 0, 0],
-  pose_rpy_deg: [90, -90, 0],
+  imgsz: 960,
+  base_offset_m: [0.13, 0, 0],
+  pose_rpy_deg: [90.1, -3.89, -1.41],
+  rotate_inference_modes: ["none", "cw90", "ccw90"],
   target_labels: ["bottle", "cup"],
 };
 

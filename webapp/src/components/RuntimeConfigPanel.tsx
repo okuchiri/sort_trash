@@ -50,6 +50,8 @@ function NumericInput({
 }
 
 export function RuntimeConfigPanel({ config, onChange, onApply, disabled }: Props) {
+  const rotateOptions = ["none", "cw90", "ccw90", "180"] as const;
+
   const updateOffset = (index: 0 | 1 | 2, value: number) => {
     const next = [...config.base_offset_m] as [number, number, number];
     next[index] = value;
@@ -75,6 +77,7 @@ export function RuntimeConfigPanel({ config, onChange, onApply, disabled }: Prop
         <NumericInput label="Drop Hover Z (m)" value={config.drop_hover_z_m} step={0.01} onChange={(value) => onChange({ ...config, drop_hover_z_m: value })} />
         <NumericInput label="Drop Z (m)" value={config.drop_z_m} step={0.01} onChange={(value) => onChange({ ...config, drop_z_m: value })} />
         <NumericInput label="Follow Rate (Hz)" value={config.follow_rate_hz} step={1} onChange={(value) => onChange({ ...config, follow_rate_hz: value })} />
+        <NumericInput label="Inference ImgSz" value={config.imgsz} step={32} onChange={(value) => onChange({ ...config, imgsz: Math.max(320, Math.round(value)) })} />
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -87,6 +90,33 @@ export function RuntimeConfigPanel({ config, onChange, onApply, disabled }: Prop
         <NumericInput label="Pose RX" value={config.pose_rpy_deg[0]} step={1} onChange={(value) => updateRpy(0, value)} />
         <NumericInput label="Pose RY" value={config.pose_rpy_deg[1]} step={1} onChange={(value) => updateRpy(1, value)} />
         <NumericInput label="Pose RZ" value={config.pose_rpy_deg[2]} step={1} onChange={(value) => updateRpy(2, value)} />
+      </div>
+
+      <div className="mt-4 rounded-2xl border border-slate-800 bg-black/20 p-3">
+        <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.24em] text-slate-400">Rotate Inference Modes</div>
+        <div className="flex flex-wrap gap-2">
+          {rotateOptions.map((mode) => {
+            const active = config.rotate_inference_modes.includes(mode);
+            return (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => {
+                  const next = active
+                    ? config.rotate_inference_modes.filter((item) => item !== mode)
+                    : [...config.rotate_inference_modes, mode];
+                  onChange({ ...config, rotate_inference_modes: next.length > 0 ? next : ["none"] });
+                }}
+                className={[
+                  "rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-[0.22em]",
+                  active ? "border-amber-400/40 bg-amber-400/10 text-amber-200" : "border-slate-700 bg-slate-900 text-slate-400",
+                ].join(" ")}
+              >
+                {mode}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="mt-4 rounded-2xl border border-slate-800 bg-black/20 p-3">

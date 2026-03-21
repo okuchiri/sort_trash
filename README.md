@@ -38,6 +38,7 @@ sort_trash/
 │   ├── calibration.identity.yaml       # 无真机时使用的占位标定文件
 │   ├── task_poses.yaml                 # 记录 home/work/standby 等流程位姿
 │   ├── drop_poses.yaml                 # 记录统一垃圾标签的回收盒投放位姿
+│   ├── web_runtime_config.yaml         # 网页控制台后端使用的运行时参数持久化文件
 │   └── robot_workspace.yaml            # 机械臂工作空间约束和已知安全区域
 ├── data/
 │   └── calib_run_03/                   # 当前可用的一套手眼标定结果和验证结果
@@ -68,11 +69,14 @@ sort_trash/
 │   │   └── _common.py                  # 标定流程共用的角点检测和 PnP 工具
 │   └── control/
 │       ├── _safety.py                  # 统一安全规则，例如末端 z >= 0.10m
+│       ├── _web_console_motion.py      # 网页后端复用的非交互式动作/YAML 操作逻辑
+│       ├── _web_console_runtime.py     # 网页后端常驻状态：相机、检测、视频帧、任务状态
 │       ├── move_flange_pose.py         # 机械臂笛卡尔位姿调试工具
 │       ├── hover_detected_target.py    # 检测目标后悬停到目标上方，可单次或连续跟随
 │       ├── run_fake_grasp_cycle.py     # 当前最重要的完整 fake grasp 流程脚本
 │       ├── record_task_poses.py        # 记录 home/work/standby 的完整六维位姿
 │       ├── record_drop_poses.py        # 记录统一垃圾标签的回收盒末端投放位姿
+│       ├── web_console_api.py          # FastAPI 本地后端，给 webapp 提供 /api/* 接口
 │       ├── probe_cartesian_reachability.py
 │       │                                   # 探测哪些笛卡尔点可达
 │       ├── sweep_cartesian_pose.py     # 从一个已知可达点逐步扫向目标点
@@ -385,28 +389,94 @@ webapp/
 
 - React + Vite + Tailwind 的本地 Fake Grasp 操作台壳
 - 页面结构按真实 `/api/*` 协议设计
-- 可用 `mock` 模式先做前端联调
-- 不直接碰机器人 SDK
+- 已有一套本地 FastAPI 后端可对接真实流程
+- 前端不直接碰机器人 SDK，而是统一走 `/api/*`
 
 当前前端范围说明：
 
 - 已有前端工程骨架、页面组件、API 客户端壳、mock 层
-- **还没有正式 FastAPI 后端**
+- 已有本地后端：
+  - `scripts/control/web_console_api.py`
+  - `scripts/control/_web_console_runtime.py`
+  - `scripts/control/_web_console_motion.py`
 - 默认真实接口使用相对路径 `/api`
+- 第一版真实接入范围：
+  - 状态
+  - 视频流
+  - 检测结果
+  - `home/work/standby` 与 `bottle/cup` 读写
+  - 运行时参数读写
+  - 单步移动 `home/work/standby`
+  - 一次 fake grasp
+  - 停止当前任务
+- 第一版**不接真实 follow**，前端会显式禁用 Follow 按钮
 
-如果你在有 Node.js / npm 的机器上运行：
+先启动后端：
+
+```bash
+cd /home/robot/project/sort_trash
+conda activate grasp-gpu
+python scripts/control/web_console_api.py \
+  --camera-serial 241222074755 \
+  --allow-cpu \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
+  --host 0.0.0.0 \
+  --port 8000
+```
+
+再启动前端：
 
 ```bash
 cd /home/robot/project/sort_trash/webapp
-npm install
-VITE_USE_MOCK=true npm run dev
+VITE_USE_MOCK=false npm run dev
 ```
 
 说明：
 
 - `VITE_USE_MOCK=true`：使用本地 mock 数据开发
-- `VITE_USE_MOCK=false` 或不设置：按真实 `/api/*` 请求后端
-- 如果当前机器没有 `node` / `npm`，就只能先保留代码，不能在本机直接构建
+- `VITE_USE_MOCK=false`：按真实 `/api/*` 请求本地 FastAPI 后端
+- `vite.config.ts` 已增加 `/api -> http://localhost:8000` 代理
+- 前端当前默认运行参数已经对齐到常用基线：
+  - `hover_height_m=0.15`
+  - `grasp_z_offset_m=0.10`
+  - `base_offset_m=[0.13, 0, 0]`
+  - `pose_rpy_deg=[90.10, -3.89, -1.41]`
+- 这台机器当前 `node` 版本过旧（`v12.22.9`），本地执行 `npm run build` 会失败
+- 要正常构建当前前端，建议使用 **Node 18+**
+
+后端当前主要接口：
+
+- `GET /api/status`
+- `GET /api/detection/state`
+- `GET /api/video.mjpg`
+- `GET /api/task-poses`
+- `GET /api/drop-poses`
+- `GET /api/runtime-config`
+- `POST /api/task-poses/record`
+- `POST /api/drop-poses/record`
+- `POST /api/config/runtime`
+- `POST /api/robot/move-home`
+- `POST /api/robot/move-work`
+- `POST /api/robot/move-standby`
+- `POST /api/workflow/fake-grasp`
+- `POST /api/workflow/stop`
+
+后端设计约束：
+
+- **不修改**现有真实控制脚本 `run_fake_grasp_cycle.py` / `hover_detected_target.py`
+- 网页后端只是在新文件里复用/封装原有逻辑
+- fake grasp 改成“API 触发的非交互模式”
+- 相机/YOLO 由后端常驻持有
+- `/api/status` 里会额外返回：
+
+```json
+"capabilities": {
+  "fake_grasp": true,
+  "follow": false,
+  "video": true,
+  "pose_recording": true
+}
+```
 
 ### 第 8 步：记录流程位姿和回收点
 
@@ -513,6 +583,10 @@ python scripts/control/run_sort_trash_pipeline.py \
 - 已增加回收点记录脚本 `record_drop_poses.py`
 - 已新增统一 8 类垃圾标签映射层，并让主要运行入口统一基于 `target_name` 工作
 - 已增加 fake 抓取全流程脚本 `run_fake_grasp_cycle.py`
+- 已增加本地 FastAPI 网页后端 `web_console_api.py`
+- 已增加网页后端常驻运行时 `_web_console_runtime.py`
+- 已增加网页后端动作/YAML 封装 `_web_console_motion.py`
+- `webapp/` 已接上真实 `/api/*` 协议、能力位和本地代理
 - `detect_realsense_yolo_xyz.py` 已支持同时显示 `camera_xyz` 和 `base_xyz`
 - `move_flange_pose.py` 已支持更细的发送顺序调试和姿态误差检查
 - 主要位姿控制入口已统一增加 `z >= 0.10m` 安全检查

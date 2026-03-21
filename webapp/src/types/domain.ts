@@ -24,6 +24,13 @@ export interface SafetyConfig {
   min_z_m: number;
 }
 
+export interface Capabilities {
+  fake_grasp: boolean;
+  follow: boolean;
+  video: boolean;
+  pose_recording: boolean;
+}
+
 export interface SystemStatus {
   can_up: boolean;
   robot_connected: boolean;
@@ -34,6 +41,11 @@ export interface SystemStatus {
   current_step?: WorkflowStep | null;
   calibration_file: string;
   safety: SafetyConfig;
+  capabilities?: Capabilities;
+  last_issue?: {
+    code: string;
+    message: string;
+  } | null;
 }
 
 export interface DetectionTarget {
@@ -50,6 +62,10 @@ export interface DetectionTarget {
 export interface DetectionState {
   target: DetectionTarget | null;
   top_detections?: Array<{ class_name: string; confidence: number }>;
+  reachability_issue?: {
+    code: string;
+    message: string;
+  } | null;
 }
 
 export interface RuntimeConfig {
@@ -58,8 +74,10 @@ export interface RuntimeConfig {
   drop_hover_z_m: number;
   drop_z_m: number;
   follow_rate_hz: number;
+  imgsz: number;
   base_offset_m: [number, number, number];
   pose_rpy_deg: [number, number, number];
+  rotate_inference_modes: string[];
   target_labels: string[];
 }
 

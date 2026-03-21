@@ -8,6 +8,7 @@ function formatVec(values?: number[]) {
 
 export function DetectionCard({ detection }: { detection: DetectionState | null }) {
   const target = detection?.target;
+  const reachabilityIssue = detection?.reachability_issue;
 
   return (
     <section className="hud-panel rounded-[28px] p-5">
@@ -17,6 +18,12 @@ export function DetectionCard({ detection }: { detection: DetectionState | null 
       </div>
       {target ? (
         <div className="space-y-4">
+          {reachabilityIssue ? (
+            <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100">
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-[0.24em] text-rose-300">Target Unreachable</div>
+              <div>{reachabilityIssue.message}</div>
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
             <div className="rounded-2xl border border-slate-800 bg-black/20 p-3">
               <div className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Class</div>

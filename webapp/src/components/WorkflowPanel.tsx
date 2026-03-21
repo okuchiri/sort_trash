@@ -7,6 +7,8 @@ interface WorkflowPanelProps {
   currentStep?: WorkflowStep | null;
   canRunFakeGrasp: boolean;
   canStartFollow: boolean;
+  canStopFollow: boolean;
+  followSupported: boolean;
   busy: boolean;
   onMoveHome: () => void;
   onMoveWork: () => void;
@@ -79,12 +81,12 @@ export function WorkflowPanel(props: WorkflowPanelProps) {
         />
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
-            label="Start Follow"
+            label={props.followSupported ? "Start Follow" : "Follow Soon"}
             onClick={props.onStartFollow}
             disabled={!props.canStartFollow}
             icon={<Waves size={14} />}
           />
-          <ActionButton label="Stop Follow" onClick={props.onStopFollow} disabled={false} icon={<Square size={14} />} />
+          <ActionButton label="Stop Follow" onClick={props.onStopFollow} disabled={!props.canStopFollow} icon={<Square size={14} />} />
         </div>
       </div>
 

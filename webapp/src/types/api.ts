@@ -2,6 +2,7 @@ export type ApiErrorCode =
   | "CAN_DOWN"
   | "BUSY"
   | "MIN_Z_BLOCKED"
+  | "UNREACHABLE_TARGET"
   | "MISSING_TASK_POSE"
   | "MISSING_DROP_POSE"
   | "CAMERA_NOT_READY"
