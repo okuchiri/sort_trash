@@ -1,5 +1,7 @@
 # sort_trash
 
+[English README](./README.en.md)
+
 这个仓库现在适合按“小步验证”推进，不适合一上来追求整套抓取闭环。
 
 建议顺序：
@@ -127,6 +129,22 @@ bash environment/setup_grasp_gpu.sh
 这只是一个占位标定文件，目的是让你在没有真机、没有真实标定结果时，先把脚本入口、模型加载、配置解析这些基础链路跑通。
 
 只要后面开始碰机械臂，就必须换成真实的 `calibration_result.yaml`。
+
+当前这台机器上已经切换到：
+
+- 主标定：`data/calib_run_03/calibration_result.yaml`
+- 网页后端运行时配置：`config/web_runtime_config.yaml`
+- 本地前端 Node：`~/.local/node-v20.19.0-linux-x64`
+
+当前常用真机参数基线：
+
+- `hover_height_m=0.15`
+- `grasp_z_offset_m=0.10`
+- `grasp_offset_m=[0.13, 0.0, 0.0]`
+- `grasp_rpy_deg=[90.10, -3.89, -1.41]`
+- `pose_rpy_deg=[90.10, -3.89, -1.41]`
+- `imgsz=960`
+- `rotate_inference_modes=[none, cw90, ccw90]`
 
 ## 基础自检
 
@@ -347,7 +365,7 @@ python scripts/control/hover_detected_target.py \
 - 当前默认优先抓取 `bottle`、`cup`、`drink_can`
 - `cell phone` 会按 `bottle` 处理，方便兼容当前场景中的误检
 - 目标短暂丢失时会保留一段时间继续使用最近一次结果
-- 当前默认姿态已经改成 `rx=90, ry=-90, rz=0`
+- 当前真机常用姿态基线是 `rx=90.10, ry=-3.89, rz=-1.41`
 - 支持运行时手动调偏移：
   - `a / d`：`X - / X +`
   - `w / s`：`Y + / Y -`
@@ -372,8 +390,9 @@ python scripts/control/hover_detected_target.py \
   --camera-serial 241222074755 \
   --allow-cpu \
   --calibration-file ./data/calib_run_03/calibration_result.yaml \
-  --follow-rate-hz 10 \
-  --hover-height-m 0.20 \
+  --hover-height-m 0.15 \
+  --base-offset-m 0.13 0 0 \
+  --pose-rpy-deg 90.10 -3.89 -1.41 \
   --go
 ```
 
@@ -416,10 +435,14 @@ webapp/
 ```bash
 cd /home/robot/project/sort_trash
 conda activate grasp-gpu
+DISPLAY=:0 XAUTHORITY=/run/user/1000/gdm/Xauthority \
 python scripts/control/web_console_api.py \
   --camera-serial 241222074755 \
   --allow-cpu \
   --calibration-file ./data/calib_run_03/calibration_result.yaml \
+  --fps 15 \
+  --imgsz 960 \
+  --rotate-inference-modes none cw90 ccw90 \
   --host 0.0.0.0 \
   --port 8000
 ```
@@ -428,6 +451,7 @@ python scripts/control/web_console_api.py \
 
 ```bash
 cd /home/robot/project/sort_trash/webapp
+export PATH=/home/robot/.local/node-v20.19.0-linux-x64/bin:$PATH
 VITE_USE_MOCK=false npm run dev
 ```
 
@@ -439,10 +463,18 @@ VITE_USE_MOCK=false npm run dev
 - 前端当前默认运行参数已经对齐到常用基线：
   - `hover_height_m=0.15`
   - `grasp_z_offset_m=0.10`
+  - `imgsz=960`
   - `base_offset_m=[0.13, 0, 0]`
   - `pose_rpy_deg=[90.10, -3.89, -1.41]`
-- 这台机器当前 `node` 版本过旧（`v12.22.9`），本地执行 `npm run build` 会失败
-- 要正常构建当前前端，建议使用 **Node 18+**
+  - `rotate_inference_modes=["none","cw90","ccw90"]`
+- 这台机器已经在用户目录安装可用的 Node 20：
+  - `~/.local/node-v20.19.0-linux-x64`
+- 我已经把它写进 `~/.bashrc`，新开终端会优先使用它
+- 如果当前 shell 还是旧 Node，可以先执行：
+
+```bash
+export PATH=/home/robot/.local/node-v20.19.0-linux-x64/bin:$PATH
+```
 
 后端当前主要接口：
 
@@ -467,6 +499,9 @@ VITE_USE_MOCK=false npm run dev
 - 网页后端只是在新文件里复用/封装原有逻辑
 - fake grasp 改成“API 触发的非交互模式”
 - 相机/YOLO 由后端常驻持有
+- 如果 `target_hover` 或 `pregrasp_10cm` 实际明显不到位，后端会判定：
+  - `UNREACHABLE_TARGET`
+  - 前端会显示“目标不可达，请重新识别/重试抓取”
 - `/api/status` 里会额外返回：
 
 ```json
@@ -528,12 +563,8 @@ python scripts/control/record_drop_poses.py --record drink_can
 
 - `scripts/control/run_fake_grasp_cycle.py`
 
-当前默认参数基线：
-
-- 默认姿态：`rx=90, ry=-90, rz=0`
-- `target_hover`：目标上方 `0.20m`
-- `pregrasp_10cm`：当前默认 `grasp_z_offset_m=0.18`
-- `drop_down`：固定 `z=0.15m`
+当前脚本内默认值和真机常用值不完全一样。  
+如果你要复现实测效果，优先用下面这条“当前常用真机命令”。
 
 运行方式：
 
@@ -545,10 +576,16 @@ python scripts/control/run_fake_grasp_cycle.py \
   --camera-serial 241222074755 \
   --allow-cpu \
   --calibration-file ./data/calib_run_03/calibration_result.yaml \
-  --hover-height-m 0.20 \
+  --fps 15 \
+  --imgsz 960 \
+  --hover-height-m 0.15 \
+  --grasp-z-offset-m 0.10 \
+  --grasp-offset-m 0.13 0 0 \
+  --grasp-rpy-deg 90.10 -3.89 -1.41 \
+  --pose-rpy-deg 90.10 -3.89 -1.41 \
+  --drop-hover-offset-m 0.10 \
   --drop-z-m 0.15 \
-  --drop-hover-z-m 0.25 \
-  --pose-rpy-deg 90 -90 0 \
+  --rotate-inference-modes none cw90 ccw90 \
   --go
 ```
 
@@ -575,6 +612,7 @@ python scripts/control/run_sort_trash_pipeline.py \
 
 - 机械臂相关脚本现在会优先使用当前仓库内的 `pyAgxArm`
 - 环境文件已去掉旧的绝对路径依赖
+- 本机前端开发环境已经切到用户目录的 Node 20，可正常 `npm run build`
 - 已增加总控骨架脚本和示例配置
 - 已增加标准 ChArUco 生成脚本和可打印板
 - 已增加目标悬停脚本 `hover_detected_target.py`
@@ -587,6 +625,8 @@ python scripts/control/run_sort_trash_pipeline.py \
 - 已增加网页后端常驻运行时 `_web_console_runtime.py`
 - 已增加网页后端动作/YAML 封装 `_web_console_motion.py`
 - `webapp/` 已接上真实 `/api/*` 协议、能力位和本地代理
+- 网页端运行时配置已支持 `imgsz` 和 `rotate_inference_modes`
+- 网页端会显示 `UNREACHABLE_TARGET`，不可达目标不会继续执行闭手抓取
 - `detect_realsense_yolo_xyz.py` 已支持同时显示 `camera_xyz` 和 `base_xyz`
 - `move_flange_pose.py` 已支持更细的发送顺序调试和姿态误差检查
 - 主要位姿控制入口已统一增加 `z >= 0.10m` 安全检查
