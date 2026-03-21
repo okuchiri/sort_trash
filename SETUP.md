@@ -1,5 +1,6 @@
-## WSL 启动条例
+## 启动条例
 0. 确认机械臂断电，电脑已经接入机械臂 USB 、机械臂上位机网线、摄像头、灵巧手。
+
 1. 开启电脑，使用 usbipd bind 以上设备。 ```usbipd bind --busid <BUSID>```
 2. 启动 WSL 使用 usbipd attach 以上设备。 ```usbipd attach --wsl --busid <BUSID>```
 3. 在 WSL 终端中加载 Linux 内核并拉起服务。 
@@ -26,8 +27,37 @@ sudo ip link set can0 up
           gs_usb: tseg1 1..16 tseg2 1..8 sjw 1..4 brp 1..1024 brp-inc 1
           clock 48000000 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 parentbus usb parentdev 1-1:1.0 
 ```
+7. 进行机械臂标定。确保深度相机和机械臂都处在最终固定位置。
 
-7. 使用终端启动设备
+采集标定数据：
+```
+python /root/dev/sort_trash/scripts/calibration/capture_eye_to_hand.py \
+  --channel can0 \
+  --board-type charuco \
+  --board-cols 11 \
+  --board-rows 8 \
+  --square-size-mm 15 \
+  --marker-size-mm 11 \
+  --aruco-dict DICT_4X4_50 \
+  --samples 15 \
+  --output-dir ./data/calib_run_03
+```
+计算标定文件：
+```
+python /root/dev/sort_trash/scripts/calibration/solve_eye_to_hand.py \
+  --dataset-dir ./data/calib_run_03 \
+  --method park
+ ```
+ 测试标定误差：
+ ```
+ python /root/dev/sort_trash/scripts/calibration/verify_eye_to_hand.py \
+  --calibration-file ./data/calib_run_03/calibration_result.yaml \
+  --channel can0 \
+  --camera-serial 241222074755 \
+  --samples 5
+ ```
+
+8. 使用终端启动设备
 ```
 python /root/dev/sort_trash/scripts/control/run_fake_grasp_cycle.py \
   --camera-serial 241222074755 \
@@ -44,8 +74,8 @@ python /root/dev/sort_trash/scripts/control/run_fake_grasp_cycle.py \
   --rotate-inference-modes none cw90 ccw90 \
   --go
  ```
- 8.确认运行正常后在两个终端中分别运行 WebUI 的前后端。先启动后端，再启动前端。
+ 9. 确认运行正常后在两个终端中分别运行 WebUI 的前后端。先启动后端，再启动前端。
  
-  后端 ```bash '/root/dev/test_backend.sh'```
+ 后端 ```bash '/root/dev/test_backend.sh'```
  
-  前端 ```bash '/root/dev/test_frontend.sh'```
+ 前端 ```bash '/root/dev/test_frontend.sh'```
