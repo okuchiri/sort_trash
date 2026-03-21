@@ -1,10 +1,10 @@
 ## 启动条例
 ### 注意：请务必确保命令均在工作目录下运行
-0. 确认机械臂断电，电脑已经接入机械臂 USB 、机械臂上位机网线、摄像头、灵巧手。
+0. 确认机械臂断电，电脑已经接入机械臂 USB 、机械臂网线、摄像头、灵巧手。
 
 1. 开启电脑，使用 usbipd bind 以上设备。 ```usbipd bind --busid <BUSID>```
 2. 启动 WSL 使用 usbipd attach 以上设备。 ```usbipd attach --wsl --busid <BUSID>```
-3. 进入工作目录 ```cd /root/dev/sort-trash```
+3. 进入工作目录，**请修改该路径为你的工作路径**。 ```cd /root/dev/MITHackathon-Teleoperation```
 4. 在 WSL 终端中加载 Linux 内核并拉起服务。 
 ```
 sudo modprobe can
@@ -15,9 +15,9 @@ sudo modprobe cdc_acm
 sudo bash pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh can0 1000000
 sudo ip link set can0 up
 ```
-5. 给机械臂通电，在上位机中打开 CAN 口通信
-6. 测试 ```candump can0``` ，确保有输出
-7. 检查 ```ip -details link show can0``` 
+5. 给机械臂通电，在上位机中打开 CAN 口通信。
+6. 测试 ```candump can0``` ，确保有输出。
+7. 检查 ```ip -details link show can0``` 。
 
 正确输出如下：
 ```
@@ -59,7 +59,7 @@ python scripts/calibration/solve_eye_to_hand.py \
   --samples 5
  ```
 
-9. 使用终端启动设备
+9. 使用终端启动设备。
 ```
 python scripts/control/run_fake_grasp_cycle.py \
   --camera-serial 241222074755 \
@@ -76,7 +76,7 @@ python scripts/control/run_fake_grasp_cycle.py \
   --rotate-inference-modes none cw90 ccw90 \
   --go
  ```
- 10. 确认运行正常后在两个终端中分别运行 WebUI 的前后端。先启动后端，再启动前端。
+ 10. 确认运行正常后在两个终端中分别运行 WebUI 的前后端。推荐的启动顺序是先后端，再前端。
  
  后端：
  ```
@@ -93,7 +93,7 @@ python scripts/control/run_fake_grasp_cycle.py \
   --port 8000
  ```
  
- 前端 
+ 前端：
  ```
  cd /root/dev/MITHackathon-Teleoperation/webapp
  export VITE_USE_MOCK=false
