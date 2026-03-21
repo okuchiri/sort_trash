@@ -1,6 +1,8 @@
 # sort_trash
 
 [English README](./README.en.md)
+[SETUP](./SETUP.md)
+
 
 这个仓库现在适合按“小步验证”推进，不适合一上来追求整套抓取闭环。
 
