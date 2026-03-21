@@ -1,0 +1,51 @@
+## WSL 启动条例
+0. 确认机械臂断电，电脑已经接入机械臂 USB 、机械臂上位机网线、摄像头、灵巧手。
+1. 开启电脑，使用 usbipd bind 以上设备。 ```usbipd bind --busid <BUSID>```
+2. 启动 WSL 使用 usbipd attach 以上设备。 ```usbipd attach --wsl --busid <BUSID>```
+3. 在 WSL 终端中加载 Linux 内核并拉起服务。 
+```
+sudo modprobe can
+sudo modprobe can_raw
+sudo modprobe gs_usb
+sudo modprobe uvcvideo
+sudo modprobe cdc_acm
+sudo bash /root/dev/sort_trash/pyAgxArm/pyAgxArm/scripts/ubuntu/can_activate.sh can0 1000000
+sudo ip link set can0 up
+```
+4. 给机械臂通电，在上位机中打开 CAN 口通信
+5. 测试 ```candump can0``` ，确保有输出
+6. 检查 ```ip -details link show can0``` 
+
+正确输出如下：
+```
+6: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 16 qdisc pfifo_fast state UP mode DEFAULT group default qlen 10
+    link/can  promiscuity 0 minmtu 0 maxmtu 0 
+    can state ERROR-ACTIVE restart-ms 0 
+          bitrate 1000000 sample-point 0.750 
+          tq 62 prop-seg 5 phase-seg1 6 phase-seg2 4 sjw 2
+          gs_usb: tseg1 1..16 tseg2 1..8 sjw 1..4 brp 1..1024 brp-inc 1
+          clock 48000000 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 parentbus usb parentdev 1-1:1.0 
+```
+
+7. 使用终端启动设备
+```
+python /root/dev/sort_trash/scripts/control/run_fake_grasp_cycle.py \
+  --camera-serial 241222074755 \
+  --allow-cpu \
+  --calibration-file /root/dev/sort_trash/data/calib_run_03/calibration_result.json \
+  --imgsz 960 \
+  --hover-height-m 0.15 \
+  --grasp-z-offset-m 0.10 \
+  --grasp-offset-m 0.13 0 0 \
+  --grasp-rpy-deg 90.10 -3.89 -1.41 \
+  --pose-rpy-deg 90.10 -3.89 -1.41 \
+  --drop-hover-offset-m 0.10 \
+  --drop-z-m 0.15 \
+  --rotate-inference-modes none cw90 ccw90 \
+  --go
+ ```
+ 8.确认运行正常后在两个终端中分别运行 WebUI 的前后端。先启动后端，再启动前端。
+ 
+  后端 ```bash '/root/dev/test_backend.sh'```
+ 
+  前端 ```bash '/root/dev/test_frontend.sh'```
