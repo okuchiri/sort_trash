@@ -20,7 +20,7 @@ def create_can_comm_config(
     auto_connect: bool = True,
     timeout: float = 1.0,
     receive_own_messages: bool = False,
-    local_loopback: bool = False,
+    local_loopback: bool = True,
 ):
     return {
         "channel": channel,
@@ -29,9 +29,9 @@ def create_can_comm_config(
         "enable_check_can": enable_check_can,
         "auto_connect": auto_connect,
         "timeout": timeout,
-        # When using SocketCAN, if you create separate send/recv buses, you may
-        # receive frames that you just sent (local loopback). These options allow
-        # controlling that behavior. By default we disable it to avoid "self RX".
+        # Keep SocketCAN local loopback enabled so tools like candump can observe
+        # SDK TX frames. Self RX is avoided by sharing one ThreadSafeBus for both
+        # send/recv while leaving receive_own_messages disabled by default.
         "receive_own_messages": receive_own_messages,
         "local_loopback": local_loopback,
     }
@@ -109,11 +109,11 @@ class CanCommLinux(CanCommBase):
             else self._config.get('bustype', 'socketcan')
         )
         self._bitrate = self._config.get('bitrate', 1000000)
-        self._enable_check_can = self._config.get('enable_check_can', False)
-        self._auto_connect = self._config.get('auto_connect', False)
+        self._enable_check_can = self._config.get('enable_check_can', True)
+        self._auto_connect = self._config.get('auto_connect', True)
         self._timeout = self._config.get('timeout', 1.0)
         self._receive_own_messages = self._config.get("receive_own_messages", False)
-        self._local_loopback = self._config.get("local_loopback", False)
+        self._local_loopback = self._config.get("local_loopback", True)
         # 总线状态
         self.recv_bus = None
         self.send_bus = None
@@ -132,12 +132,13 @@ class CanCommLinux(CanCommBase):
 
     def connect(self, **kwargs):
         if self.recv_bus is not None and self.send_bus is not None:
-            # return self.CAN_STATUS.INIT_CAN_BUS_IS_EXIST
+            self._last_error = None
+            self._is_connected = True
+            self._is_stopped = False
             return True
+        recv_bus = None
+        send_bus = None
         try:
-            # NOTE: With SocketCAN, if you create separate send/recv buses, you may
-            # receive your own sent frames due to local loopback being enabled by
-            # default. Disable it by default unless explicitly enabled in config.
             common_kwargs = dict(
                 channel=self._channel,
                 interface=self._interface,
@@ -151,49 +152,67 @@ class CanCommLinux(CanCommBase):
                     )
                 )
 
-            self.recv_bus = can.ThreadSafeBus(**common_kwargs)
-            self.send_bus = can.ThreadSafeBus(**common_kwargs)
-            # self.send_bus = self.recv_bus
+            recv_bus = can.ThreadSafeBus(**common_kwargs)
+            # Share one socketcan bus between TX/RX so candump still sees local
+            # loopback traffic while the SDK avoids receiving its own TX frames.
+            send_bus = recv_bus
+            if self._interface != "socketcan":
+                send_bus = can.ThreadSafeBus(**common_kwargs)
+
+            self.recv_bus = recv_bus
+            self.send_bus = send_bus
+            self._last_error = None
             self._is_connected = True
             self._is_stopped = False
-            # return self.CAN_STATUS.INIT_CAN_BUS_OPENED_SUCCESS
             return True
-        except can.CanError as e:
+        except Exception as e:
+            for bus in (send_bus, recv_bus):
+                if bus is not None:
+                    try:
+                        bus.shutdown()
+                    except Exception:
+                        pass
             self.recv_bus = None
             self.send_bus = None
-            # return self.CAN_STATUS.INIT_CAN_BUS_OPENED_FAILED
+            self._last_error = e
+            self._is_connected = False
+            self._is_stopped = True
             return False
 
     def close(self):
-        if self.recv_bus is not None and self.send_bus is not None:
-            try:
-                self.recv_bus.shutdown()  # 关闭 CAN 总线
-                self.recv_bus = None
-                self.send_bus.shutdown()
-                self.send_bus = None
-                self._is_connected = False
-                self._is_stopped = True
-                return self.CAN_STATUS.CLOSE_CAN_BUS_CONNECT_SHUT_DOWN
-            except AttributeError:
-                return self.CAN_STATUS.CLOSE_CAN_BUS_WAS_NOT_PROPERLY_INIT
-            except Exception as e:
-                return self.CAN_STATUS.CLOSE_SHUTTING_DOWN_CAN_BUS_ERR
-        else:
+        if self.recv_bus is None and self.send_bus is None:
             return self.CAN_STATUS.CLOSED_CAN_BUS_NOT_OPEN
+        try:
+            recv_bus = self.recv_bus
+            send_bus = self.send_bus
+            self.recv_bus = None
+            self.send_bus = None
+            if recv_bus is not None:
+                recv_bus.shutdown()  # 关闭 CAN 总线
+            if send_bus is not None and send_bus is not recv_bus:
+                send_bus.shutdown()
+            self._is_connected = False
+            self._is_stopped = True
+            return self.CAN_STATUS.CLOSE_CAN_BUS_CONNECT_SHUT_DOWN
+        except AttributeError:
+            return self.CAN_STATUS.CLOSE_CAN_BUS_WAS_NOT_PROPERLY_INIT
+        except Exception:
+            return self.CAN_STATUS.CLOSE_SHUTTING_DOWN_CAN_BUS_ERR
 
     def send(self, msg: Message, timeout=None):
-        if (self._get_states(self.send_bus) == self.CAN_STATUS.BUS_STATE_ACTIVE):
+        can_bus_status = self._get_states(self.send_bus)
+        if can_bus_status == self.CAN_STATUS.BUS_STATE_ACTIVE:
             try:
                 self.send_bus.send(msg, timeout)
-                # return self.CAN_STATUS.SEND_MESSAGE_SUCCESS
+                self._last_error = None
                 return True
-            # except can.CanError:
-            #     return self.CAN_STATUS.SEND_MESSAGE_FAILED
             except Exception as e:
-                # return self.CAN_STATUS.SEND_MESSAGE_FAILED
+                self._last_error = e
                 return False
         else:
-            # return self.CAN_STATUS.SEND_CAN_BUS_NOT_OK
+            self._last_error = RuntimeError(
+                f"CAN bus {self._channel} is not active: {can_bus_status.name}"
+            )
             return False
 
     def recv(self):

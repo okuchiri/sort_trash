@@ -103,6 +103,20 @@ def parse_args() -> argparse.Namespace:
         default=0.5,
         help="Keep the last stable target for this many seconds when detections flicker.",
     )
+    parser.add_argument(
+        "--target-filter-alpha",
+        "--follow-filter-alpha",
+        type=float,
+        default=0.20,
+        help="EMA smoothing factor for target_hover/pregrasp poses. Lower is smoother; 1.0 disables smoothing.",
+    )
+    parser.add_argument(
+        "--target-filter-reset-distance-m",
+        "--follow-filter-reset-distance-m",
+        type=float,
+        default=0.08,
+        help="Reset target pose filtering instead of smoothing when the target jumps farther than this distance.",
+    )
     parser.add_argument("--calibration-file", required=True, help="calibration_result.yaml with T_base_camera")
     parser.add_argument("--task-poses-file", default=str(DEFAULT_TASK_POSES_PATH), help="YAML file with home/work/standby poses")
     parser.add_argument(
@@ -410,6 +424,48 @@ def format_target_label(row: dict[str, object] | None) -> str:
     return label_text
 
 
+def smooth_pose_xyz(
+    previous_pose: list[float] | None,
+    target_pose: list[float],
+    *,
+    alpha: float,
+    reset_distance_m: float,
+) -> list[float]:
+    if previous_pose is None:
+        return [float(v) for v in target_pose]
+    delta_xyz = np.asarray(target_pose[:3], dtype=np.float64) - np.asarray(previous_pose[:3], dtype=np.float64)
+    if float(np.linalg.norm(delta_xyz)) >= max(0.0, reset_distance_m):
+        return [float(v) for v in target_pose]
+    blend = min(1.0, max(0.0, alpha))
+    smoothed = [float(v) for v in target_pose]
+    for idx in range(3):
+        smoothed[idx] = float(previous_pose[idx] + blend * (target_pose[idx] - previous_pose[idx]))
+    return smoothed
+
+
+def smooth_cycle_poses(
+    previous_cycle_poses: dict[str, list[float]] | None,
+    target_cycle_poses: dict[str, list[float]],
+    *,
+    alpha: float,
+    reset_distance_m: float,
+) -> dict[str, list[float]]:
+    if previous_cycle_poses is None:
+        return {key: [float(v) for v in pose] for key, pose in target_cycle_poses.items()}
+    smoothed = {key: [float(v) for v in pose] for key, pose in target_cycle_poses.items()}
+    for pose_key in ("target_hover", "pregrasp_10cm", "target_retreat"):
+        previous_pose = previous_cycle_poses.get(pose_key)
+        if previous_pose is None:
+            continue
+        smoothed[pose_key] = smooth_pose_xyz(
+            previous_pose,
+            target_cycle_poses[pose_key],
+            alpha=alpha,
+            reset_distance_m=reset_distance_m,
+        )
+    return smoothed
+
+
 def build_cycle_poses(best: dict[str, object], args: argparse.Namespace) -> dict[str, list[float]]:
     base = [float(v) for v in best["base_xyz_m"]]
     grasp_offset = [float(v) for v in args.grasp_offset_m]
@@ -471,7 +527,8 @@ def annotate_frame(image: np.ndarray, best: dict[str, object] | None, cycle_pose
     lines = [
         f"mode={'go' if args.go else 'dry-run'}",
         f"rotate={args.rotate_inference_label} imgsz={args.imgsz} hover_h={args.hover_height_m:.3f}m drop_hover_offset={args.drop_hover_offset_m:.3f}m",
-        "Press g to run one fake cycle, q to quit",
+        f"target_filter={'ON' if args.target_filter_enabled else 'OFF'} alpha {args.target_filter_alpha:.2f} reset {args.target_filter_reset_distance_m:.3f}m",
+        "Press h to toggle filter, g to run one fake cycle, q to quit",
     ]
     if best is not None:
         x1, y1, x2, y2 = [int(v) for v in best["bbox_xyxy"]]
@@ -607,6 +664,9 @@ def main() -> int:
     output_handle = output_path.open("a", encoding="utf-8") if output_path else None
 
     window_name = "run_fake_grasp_cycle"
+    filtered_cycle_poses: dict[str, list[float]] | None = None
+    args.target_filter_enabled = False
+    last_key = -1
     try:
         while True:
             frames = pipeline.wait_for_frames()
@@ -640,7 +700,22 @@ def main() -> int:
                 and not bool(best.get("stale"))
                 and best.get("base_xyz_m") is not None
             )
-            cycle_poses = build_cycle_poses(best, args) if can_execute_target else None
+            raw_cycle_poses = build_cycle_poses(best, args) if can_execute_target else None
+            cycle_poses = None
+            if raw_cycle_poses is not None:
+                if args.target_filter_enabled:
+                    cycle_poses = smooth_cycle_poses(
+                        filtered_cycle_poses,
+                        raw_cycle_poses,
+                        alpha=args.target_filter_alpha,
+                        reset_distance_m=args.target_filter_reset_distance_m,
+                    )
+                    filtered_cycle_poses = {key: [float(v) for v in pose] for key, pose in cycle_poses.items()}
+                else:
+                    cycle_poses = {key: [float(v) for v in pose] for key, pose in raw_cycle_poses.items()}
+                    filtered_cycle_poses = None
+            elif best is None:
+                filtered_cycle_poses = None
 
             annotated = annotate_frame(image, best, cycle_poses, args)
             cv2.imshow(window_name, annotated)
@@ -649,6 +724,8 @@ def main() -> int:
                 payload = {
                     "timestamp_unix": time.time(),
                     "best_detection": best,
+                    "target_filter_enabled": bool(args.target_filter_enabled),
+                    "raw_cycle_poses": raw_cycle_poses,
                     "cycle_poses": cycle_poses,
                     "task_poses_file": str(Path(args.task_poses_file).expanduser().resolve()),
                     "drop_poses_file": str(Path(args.drop_poses_file).expanduser().resolve()),
@@ -659,6 +736,16 @@ def main() -> int:
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
+            toggle_filter = key == ord("h") and last_key != ord("h")
+            last_key = key
+            if toggle_filter:
+                args.target_filter_enabled = not args.target_filter_enabled
+                filtered_cycle_poses = None
+                state = "enabled" if args.target_filter_enabled else "disabled"
+                print(
+                    f"Target filter {state} "
+                    f"(alpha={args.target_filter_alpha:.2f}, reset={args.target_filter_reset_distance_m:.3f}m)."
+                )
             if key != ord("g"):
                 continue
             if best is None or cycle_poses is None:

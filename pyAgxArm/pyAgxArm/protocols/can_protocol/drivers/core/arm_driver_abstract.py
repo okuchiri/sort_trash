@@ -63,7 +63,16 @@ class ArmDriverAbstract(ArmDriverInterface):
         if isinstance(msg, AttributeBase):
             data = self._parser.pack(msg)
             if data is not None:
-                self._ctx.get_comm().send(data)
+                comm = self._ctx.get_comm()
+                if not comm.send(data):
+                    last_error = getattr(comm, "get_last_error", lambda: None)()
+                    detail = (
+                        f"Failed to send CAN frame {hex(data.arbitration_id)} "
+                        f"on channel {comm.get_channel()}."
+                    )
+                    if last_error is not None:
+                        raise RuntimeError(f"{detail} Cause: {last_error}") from last_error
+                    raise RuntimeError(detail)
         else:
             raise TypeError(
                 "msg must be AttributeBase"
@@ -160,12 +169,18 @@ class ArmDriverAbstract(ArmDriverInterface):
     def connect(self, start_read_thread: bool = True) -> None:
         if not self._ctx.get_comm():
             self._ctx.init_comm()
-        if self._ctx.get_comm() is None:
+        comm = self._ctx.get_comm()
+        if comm is None:
             raise ValueError("comm is None")
         with self._lock:
-            if self._connected:
-                return
-            self._connected = self._ctx.get_comm().is_connected()
+            if not comm.is_connected():
+                self._connected = bool(comm.connect())
+            else:
+                self._connected = True
+        if not self._connected:
+            raise RuntimeError(
+                f"Failed to connect {comm.get_type()} comm on channel {comm.get_channel()}."
+            )
         if start_read_thread:
             self._ctx.start_th()
 

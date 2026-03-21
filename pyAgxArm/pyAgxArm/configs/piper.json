@@ -9,7 +9,7 @@
             "enable_check_can": false,
             "auto_connect": false,
             "timeout": 1.0,
-            "local_loopback": false,
+            "local_loopback": true,
             "receive_own_messages": false
         }
     },

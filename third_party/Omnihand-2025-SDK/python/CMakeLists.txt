@@ -16,7 +16,8 @@ target_include_directories(
 
 target_link_libraries(
   ${CUR_TARGET_NAME}
-  PRIVATE omnihand2025)
+  PRIVATE omnihand2025
+          yaml-cpp::yaml-cpp)
 
 set_target_properties(${CUR_TARGET_NAME} PROPERTIES
     INSTALL_RPATH "$ORIGIN"

@@ -74,18 +74,25 @@ class DriverContext:
         if not self.comm:
             raise NotImplementedError("comm is None!! Please init comm")
 
+        read_alive = self._read_th is not None and self._read_th.is_alive()
+        monitor_alive = self._monitor_th is not None and self._monitor_th.is_alive()
+        if read_alive and monitor_alive:
+            return
+
         self._read_stop_event.clear()
         self._monitor_stop_event.clear()
 
-        self._read_th = threading.Thread(
-            target=self._read_loop, daemon=True
-        )
-        self._read_th.start()
+        if not read_alive:
+            self._read_th = threading.Thread(
+                target=self._read_loop, daemon=True
+            )
+            self._read_th.start()
 
-        self._monitor_th = threading.Thread(
-            target=self._monitor_loop, daemon=True
-        )
-        self._monitor_th.start()
+        if not monitor_alive:
+            self._monitor_th = threading.Thread(
+                target=self._monitor_loop, daemon=True
+            )
+            self._monitor_th.start()
 
         self.fps.start()
 
